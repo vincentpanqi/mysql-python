@@ -6,25 +6,18 @@ dictionary conversions maps some kind of type to a conversion function
 which returns the corresponding value:
 
 Key: FIELD_TYPE.* (from MySQLdb.constants)
-
 Conversion function:
-
-    Arguments: string
-
-    Returns: Python object
+     Arguments: string
+     Returns: Python object
 
 Key: Python type object (from types) or class
-
 Conversion function:
-
-    Arguments: Python object of indicated type or class AND 
-               conversion dictionary
-
-    Returns: SQL literal value
-
-    Notes: Most conversion functions can ignore the dictionary, but
-           it is a required parameter. It is necessary for converting
-           things like sequences and instances.
+     Arguments: Python object of indicated type or class AND 
+                conversion dictionary
+     Returns: SQL literal value
+     Notes: Most conversion functions can ignore the dictionary, but
+            it is a required parameter. It is necessary for converting
+            things like sequences and instances.
 
 Don't modify conversions if you can avoid it. Instead, make copies
 (with the copy() method), modify the copies, and then pass them to
@@ -49,10 +42,8 @@ def Thing2Str(s, d):
     return str(s)
 
 def Unicode2Str(s, d):
-    """Convert a unicode object to a string using the default encoding.
-    This is only used as a placeholder for the real function, which
-    is connection-dependent."""
-    return s.encode()
+    """Convert a unicode object to a string using latin1 encoding."""
+    return s.encode('latin')
 
 Long2Int = Thing2Str
 
@@ -141,16 +132,3 @@ conversions = {
         (None, None),
     ],
     }
-
-try:
-    from decimal import Decimal
-    conversions[FIELD_TYPE.DECIMAL] = Decimal
-except ImportError:
-    pass
-
-try:
-    from types import BooleanType
-    def Bool2Str(s, d): return str(int(s))
-    conversions[BooleanType] = Bool2Str
-except ImportError:
-    pass
