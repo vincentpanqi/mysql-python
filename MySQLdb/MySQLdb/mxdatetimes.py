@@ -13,15 +13,15 @@ except ImportError:
 
 def DateFromTicks(ticks):
     """Convert UNIX ticks into a mx.DateTime.Date."""
-    return Date(*localtime(ticks)[:3])
+    return apply(Date, localtime(ticks)[:3])
 
 def TimeFromTicks(ticks):
     """Convert UNIX ticks into a mx.DateTime.Time."""
-    return Time(*localtime(ticks)[3:6])
+    return apply(Time, localtime(ticks)[3:6])
 
 def TimestampFromTicks(ticks):
     """Convert UNIX ticks into a mx.DateTime.Timestamp."""
-    return Timestamp(*localtime(ticks)[:6])
+    return apply(Timestamp, localtime(ticks)[:6])
 
 def format_DATE(d):
     """Format a DateTime object as an ISO date."""
