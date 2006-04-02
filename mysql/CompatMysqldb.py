@@ -1,20 +1,8 @@
-"""
-Original author: James Henstridge <james@daa.com.au>
-Adapted by: Andy Dustman <andy@dustman.net>
+#author: James Henstridge <james@daa.com.au>
+#adapted to _mysql by Andy Dustman <andy@dustman.net>
+#under no circumstances should you bug James about this!!!
 
-This is the original Mysqldb.py module which came with MySQLmodule-1.4,
-only it has been adapted to use _mysql instead MySQL. It is intended
-for backwards compatibility purposes only. But as a bonus, transactions
-will work if your database server and table types support them. It is
-called CompatMysqldb instead of Mysqldb so as not to interfere with an
-existing Mysqldb, or MySQLdb on case-insensitive brain-dead operating
-systems.
-
-Under no circumstances should you bug James Henstridge about this!!!
-
------
-
-This is a class that implements an interface to mySQL databases, conforming
+"""This is a class that implements an interface to mySQL databases, conforming
 to the API published by the Python db-sig at
 http://www.python.org/sigs/db-sig/DatabaseAPI.html
 
@@ -102,7 +90,6 @@ ROWID     = _Set()
 class Connection:
 	"""This is the connection object for the mySQL database interface."""
 	def __init__(self, host, user, passwd, db):
-		from _mysql import CLIENT
 		kwargs = {}
 		kwargs['conv'] = _type_conv
 		if host: kwargs['host'] = host
@@ -114,7 +101,10 @@ class Connection:
 		except MySQL.Error, msg:
 			raise error, msg
 		self.__curs = Cursor(self.__conn)
-		self.__transactional = self.__conn.server_capabilities & CLIENT.TRANSACTIONS
+		self.__conn.query("SHOW VARIABLES")
+		self.__vars = {}
+		for k, v in self.__conn.store_result().fetch_row(0):
+			self.__vars[k] = v
 
 	def __del__(self):
 		self.close()
@@ -137,12 +127,12 @@ class Connection:
 
 	def commit(self):
 		"""Commit the current transaction."""
-		if self.__transactional:
+		if self.__vars.get('have_bdb', 'NO') == 'YES':
 			 self.__conn.query("COMMIT")
 
 	def rollback(self):
 		"""Rollback the current transaction."""
-		if self.__transactional:
+		if self.__vars.get('have_bdb', 'NO') == 'YES':
 			 self.__conn.query("ROLLBACK")
 		else: raise error, "Not supported by server"
 
