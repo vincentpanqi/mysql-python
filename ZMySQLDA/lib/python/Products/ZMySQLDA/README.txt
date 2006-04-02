@@ -3,12 +3,12 @@ Z MySQL DA
   This is the Z MySQL database adapter product for the 
   Z Object Publishing Environment.
   
-  ** NOTE **
+  ***** NOTE *****
 
   Note that the Z MySQL database adapter is compatible with MySQL
-  versions 3.22 and later (including MySQL 3.23, 4.0, and 4.1).
+  versions 3.22 and later (including MySQL 3.23).
   
-  ** IMPORTANT **
+  ***** IMPORTANT *****
   
   This product is distributed as a NON-BINARY release!
   
@@ -21,13 +21,9 @@ Z MySQL DA
 
     The Z MySQL database adapter uses the MySQLdb package.  
     This must be installed before you can use the Z MySQL DA.
-    You can find this at::
 
-        http://sourceforge.net/projects/mysql-python
-
-    You need at least version 1.0.0; 1.2.0 is recommended. If you are
-    compiling this yourself, you must use the same python executable
-    as your Zope installation uses, otherwise Zope will not find it.
+    Instructions on building the extension modules are given in the
+    the README.txt file in the source directory.
 
   Connection Strings
   

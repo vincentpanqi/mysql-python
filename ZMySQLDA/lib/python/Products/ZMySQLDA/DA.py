@@ -88,7 +88,6 @@ __doc__='''%s Database Connection
 $Id$''' % database_type
 __version__='$Revision$'[11:-2]
 
-import os
 from db import DB
 import Shared.DC.ZRDB.Connection, sys, DABase
 from App.Dialogs import MessageDialog
@@ -101,9 +100,9 @@ manage_addZMySQLConnectionForm=HTMLFile('connectionAdd',globals())
 
 def manage_addZMySQLConnection(self, id, title,
                                 connection_string,
-                                check=None, REQUEST=None):
+                                check=None, transactions=None, REQUEST=None):
     """Add a DB connection to a folder"""
-    self._setObject(id, Connection(id, title, connection_string, check))
+    self._setObject(id, Connection(id, title, connection_string, check, transactions))
     if REQUEST is not None: return self.manage_main(self,REQUEST)
 
 class Connection(DABase.Connection):
@@ -114,18 +113,45 @@ class Connection(DABase.Connection):
     icon='misc_/Z%sDA/conn' % database_type
 
     manage_properties=HTMLFile('connectionEdit', globals())
+    manage_main=HTMLFile('connectionStatus', globals())
+
+    def __init__(self, id, title, connection_string, check=None, transactions=None):
+        self.id=str(id)
+        self.edit(title, connection_string, check, transactions)
 
     def factory(self): return DB
+
+    def edit(self, title, connection_string, check=1, transactions=None):
+        self.title=title
+        self.connection_string=connection_string
+	self.transactions = transactions
+        if check: self.connect(connection_string)
+    
+    def manage_edit(self, title, connection_string, check=None, transactions=None, REQUEST=None):
+        """Change connection
+        """
+        self.edit(title, connection_string, check, transactions)
+        if REQUEST is not None:
+            return MessageDialog(
+                title='Edited',
+                message='<strong>%s</strong> has been edited.' % self.id,
+                action ='./manage_main',
+                )
 
     def connect(self,s):
         try: self._v_database_connection.close()
         except: pass
         self._v_connected=''
+	if not hasattr(self, 'transactions'): self.transactions = None
         DB=self.factory()
 	## No try. DO.
-	self._v_database_connection=DB(s)
+	self._v_database_connection=DB(s, self.transactions)
         self._v_connected=DateTime()
+
         return self
+
+    def table_info(self):
+	return self._v_database_connection.table_info()
 
     def sql_quote__(self, v, escapes={}):
         return self._v_database_connection.string_literal(v)
@@ -152,10 +178,11 @@ __ac_permissions__=(
       'manage_addZMySQLConnection')),
     )
 
-misc_={'conn': ImageFile(
-    os.path.join('Shared','DC','ZRDB','www','DBAdapterFolder_icon.gif'))}
+misc_={
+    'conn':   ImageFile('Shared/DC/ZRDB/www/DBAdapterFolder_icon.gif'),
+    }
 
 for icon in ('table', 'view', 'stable', 'what',
 	     'field', 'text','bin','int','float',
 	     'date','time','datetime'):
-    misc_[icon]=ImageFile(os.path.join('icons','%s.gif') % icon, globals())
+    misc_[icon]=ImageFile('icons/%s.gif' % icon, globals())
