@@ -5,14 +5,14 @@ These classes are dictated by the DB API v2.0:
     http://www.python.org/topics/database/DatabaseAPI-2.0.html
 """
 
-from exceptions import Exception, StandardError, Warning
+from exceptions import Exception, StandardError
 
 class MySQLError(StandardError):
     
     """Exception related to operation with MySQL."""
 
 
-class Warning(Warning, MySQLError):
+class Warning(MySQLError):
 
     """Exception raised for important warnings like data truncations
     while inserting, etc."""
