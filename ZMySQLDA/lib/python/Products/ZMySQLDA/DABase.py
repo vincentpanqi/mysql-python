@@ -120,7 +120,7 @@ class Connection(Shared.DC.ZRDB.Connection.Connection):
                     b.__name__=name
                     b._d=d
                     b._c=c
-                    #b._columns=c.columns(name)
+                    # b._columns=c.columns(name)
                     b.icon=table_icons.get(d['TABLE_TYPE'],'text')
                     r.append(b)
                     # tables[name]=b
@@ -185,7 +185,7 @@ class TableBrowser(Browser, Acquisition.Implicit):
         for d in self._c.columns(tname):
             b=ColumnBrowser()
             b._d=d
-            b.icon=d['Icon']
+            b.icon=field_icons.get(d['Type'], 'text')
             b.TABLE_NAME=tname
             r.append(b)
         return r
@@ -240,7 +240,12 @@ class ColumnBrowser(Browser):
                 (self.TABLE_NAME, self._d['Name']))
     def tpId(self): return self._d['Name']
     def tpURL(self): return "Column/%s" % self._d['Name']
-    def Description(self): return " %s" % self._d['Description']
+    def Description(self):
+        d=self._d
+        if d['Scale']:
+            return " %(Type)s(%(Precision)s,%(Scale)s) %(Nullable)s" % d
+        else:
+            return " %(Type)s(%(Precision)s) %(Nullable)s" % d
 
 table_icons={
     'TABLE': 'table',
@@ -248,3 +253,13 @@ table_icons={
     'SYSTEM_TABLE': 'stable',
     }
 
+from _mysql import FIELD_TYPE
+field_icons={
+            "CHAR": "int", "DATE": "date",
+            "DATETIME": "date", "DECIMAL": "float",
+            "DOUBLE": "float", "FLOAT": "float",
+            "MEDIUMINT": "int", "INT": "int",
+            "LONGINT": "int", "SMALLINT": "int",
+            "TIMESTAMP": "date", "TINYINT": "int",
+            "YEAR": "int"
+            }

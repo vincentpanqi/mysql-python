@@ -87,56 +87,20 @@
 __version__='$Revision$'[11:-2]
 
 import _mysql
-from _mysql_exceptions import OperationalError, NotSupportedError
-MySQLdb_version_required = (1,2,0)
-
-_v = getattr(_mysql, 'version_info', (0,0,0))
-if _v < MySQLdb_version_required:
-    raise NotSupportedError, \
-	"ZMySQLDA requires at least MySQLdb %s, %s found" % \
-	(MySQLdb_version_required, _v)
-
-from MySQLdb.converters import conversions
-from MySQLdb.constants import FIELD_TYPE, CR, CLIENT
+from _mysql import FIELD_TYPE
 from Shared.DC.ZRDB.TM import TM
 from DateTime import DateTime
-from zLOG import LOG, ERROR, INFO
 
 import string, sys
-from string import strip, split, find, upper, rfind
+from string import strip, split, find, upper
 from time import time
 
-key_types = {
-    "PRI": "PRIMARY KEY",
-    "MUL": "INDEX",
-    "UNI": "UNIQUE",
-    }
+hosed_connection = (
+    _mysql.CR.SERVER_GONE_ERROR,
+    _mysql.CR.SERVER_LOST
+    )
 
-field_icons = "bin", "date", "datetime", "float", "int", "text", "time"
-
-icon_xlate = {
-    "varchar": "text", "char": "text",
-    "enum": "what", "set": "what",
-    "double": "float", "numeric": "float",
-    "blob": "bin", "mediumblob": "bin", "longblob": "bin",
-    "tinytext": "text", "mediumtext": "text",
-    "longtext": "text", "timestamp": "datetime",
-    "decimal": "float", "smallint": "int",
-    "mediumint": "int", "bigint": "int",
-    }
-
-type_xlate = {
-    "double": "float", "numeric": "float",
-    "decimal": "float", "smallint": "int",
-    "mediumint": "int", "bigint": "int",
-    "int": "int", "float": "float",
-    "timestamp": "datetime", "datetime": "datetime",
-    "time": "datetime",
-    }
-    
 def _mysql_timestamp_converter(s):
-	if len(s) < 14:
-		s = s + "0"*(14-len(s))
         parts = map(int, (s[:4],s[4:6],s[6:8],
                           s[8:10],s[10:12],s[12:14]))
 	return DateTime("%04d-%02d-%02d %02d:%02d:%02d" % tuple(parts))
@@ -144,16 +108,6 @@ def _mysql_timestamp_converter(s):
 def DateTime_or_None(s):
     try: return DateTime(s)
     except: return None
-
-def int_or_long(s):
-    try: return int(s)
-    except: return long(s)
-
-"""Locking strategy:
-
-The minimum that must be done is a mutex around a query, store_result
-sequence. When using transactions, the mutex must go around the
-entire transaction."""
 
 class DB(TM):
 
@@ -169,50 +123,47 @@ class DB(TM):
         FIELD_TYPE.TINY: "i", FIELD_TYPE.YEAR: "i",
         }
 
-    conv=conversions.copy()
-    conv[FIELD_TYPE.LONG] = int_or_long
-    conv[FIELD_TYPE.DATETIME] = DateTime_or_None
-    conv[FIELD_TYPE.DATE] = DateTime_or_None
-    conv[FIELD_TYPE.DECIMAL] = float
-    del conv[FIELD_TYPE.TIME]
-    del conv[FIELD_TYPE.BLOB]
+    types={
+        FIELD_TYPE.CHAR: "CHAR", FIELD_TYPE.DATE: "DATE",
+        FIELD_TYPE.DATETIME: "DATETIME", FIELD_TYPE.DECIMAL: "DECIMAL",
+        FIELD_TYPE.DOUBLE: "DOUBLE", FIELD_TYPE.FLOAT: "FLOAT",
+	FIELD_TYPE.INT24: "MEDIUMINT", FIELD_TYPE.VAR_STRING: "VARCHAR",
+        FIELD_TYPE.LONG: "INT", FIELD_TYPE.LONGLONG: "LONGINT",
+        FIELD_TYPE.SHORT: "SMALLINT", FIELD_TYPE.TIMESTAMP: "TIMESTAMP",
+        FIELD_TYPE.TINY: "TINYINT", FIELD_TYPE.YEAR: "YEAR",
+	FIELD_TYPE.ENUM: "ENUM", FIELD_TYPE.SET: "SET",
+	FIELD_TYPE.TINY_BLOB: "TINYBLOB", FIELD_TYPE.MEDIUM_BLOB: "MEDIUMBLOB",
+	FIELD_TYPE.BLOB: "BLOB", FIELD_TYPE.STRING: "STRING",
+        }
+
+    conv={
+        FIELD_TYPE.TIMESTAMP: _mysql_timestamp_converter,
+        FIELD_TYPE.TINY: int,
+        FIELD_TYPE.SHORT: int,
+        FIELD_TYPE.LONG: long,
+        FIELD_TYPE.FLOAT: float,
+        FIELD_TYPE.DOUBLE: float,
+        FIELD_TYPE.LONGLONG: long,
+        FIELD_TYPE.INT24: int,
+        FIELD_TYPE.YEAR: int,
+	FIELD_TYPE.DATETIME: DateTime_or_None,
+	FIELD_TYPE.DATE: DateTime_or_None,
+        }
 
     _p_oid=_p_changed=_registered=None
 
     def __init__(self,connection):
-        from thread import allocate_lock
+	from _mysql import CLIENT
         self.connection=connection
         self.kwargs = kwargs = self._parse_connection_string(connection)
         self.db=apply(self.Database_Connection, (), kwargs)
-        LOG("ZMySQLDA", INFO, "Opened new connection %s: %s" \
-            % (self.db, connection)) 
-        transactional = self.db.server_capabilities & CLIENT.TRANSACTIONS
-        if self._try_transactions == '-':
-            transactional = 0
-        elif not transactional and self._try_transactions == '+':
-            raise NotSupportedError, "transactions not supported by this server"
-        self._use_TM = self._transactions = transactional
-        if self._mysql_lock:
-            self._use_TM = 1
-        if self._use_TM:
-            self._tlock = allocate_lock()
-        self._lock = allocate_lock()
+	self.transactions = self.db.server_capabilities & CLIENT.TRANSACTIONS
 
     def _parse_connection_string(self, connection):
         kwargs = {'conv': self.conv}
         items = split(connection)
-        self._use_TM = None
-        if _mysql.get_client_info()[0] >= '5':
-            kwargs['client_flag'] = CLIENT.MULTI_STATEMENTS
         if not items: return kwargs
-        lockreq, items = items[0], items[1:]
-        if lockreq[0] == "*":
-            self._mysql_lock = lockreq[1:]
-            db_host, items = items[0], items[1:]
-            self._use_TM = 1
-        else:
-            self._mysql_lock = None
-            db_host = lockreq
+        db_host, items = items[0], items[1:]
         if '@' in db_host:
             db, host = split(db_host,'@',1)
             kwargs['db'] = db
@@ -222,13 +173,6 @@ class DB(TM):
             kwargs['host'] = host
         else:
             kwargs['db'] = db_host
-        if kwargs['db'] and kwargs['db'][0] in ('+', '-'):
-            self._try_transactions = kwargs['db'][0]
-            kwargs['db'] = kwargs['db'][1:]
-        else:
-            self._try_transactions = None
-        if not kwargs['db']:
-            del kwargs['db']
         if not items: return kwargs
         kwargs['user'], items = items[0], items[1:]
         if not items: return kwargs
@@ -241,74 +185,38 @@ class DB(TM):
                _care=('TABLE', 'VIEW')):
         r=[]
         a=r.append
-        self._lock.acquire()
-        try:
-            self.db.query("SHOW TABLES")
-            result = self.db.store_result()
-        finally:
-            self._lock.release()
-        row = result.fetch_row(1)
-	while row:
+	result = self.db.list_tables()
+	while 1:
+	    row = result.fetch_row(1)
+	    if not row: break
             a({'TABLE_NAME': row[0][0], 'TABLE_TYPE': 'TABLE'})
-            row = result.fetch_row(1)
         return r
 
     def columns(self, table_name):
-        from string import join
         try:
-            try:
-                self._lock.acquire()
-                # Field, Type, Null, Key, Default, Extra
-                self.db.query('SHOW COLUMNS FROM %s' % table_name)
-                c=self.db.store_result()
-            finally:
-                self._lock.release()
+            self.db.query('SELECT * FROM %s LIMIT 0' % table_name)
+            c=self.db.store_result()
         except:
             return ()
+        desc=c.describe()
         r=[]
-        for Field, Type, Null, Key, Default, Extra in c.fetch_row(0):
-            info = {}
-            field_default = Default and "DEFAULT %s"%Default or ''
-            if Default: info['Default'] = Default
-            if '(' in Type:
-                end = rfind(Type,')')
-                short_type, size = split(Type[:end],'(',1)
-                if short_type not in ('set','enum'):
-                    if ',' in size:
-                        info['Scale'], info['Precision'] = \
-                                       map(int, split(size,',',1))
-                    else:
-                        info['Scale'] = int(size)
-            else:
-                short_type = Type
-            if short_type in field_icons:
-                info['Icon'] = short_type
-            else:
-                info['Icon'] = icon_xlate.get(short_type, "what")
-            info['Name'] = Field
-            info['Type'] = type_xlate.get(short_type,'string')
-            info['Extra'] = Extra,
-            info['Description'] = join([Type, field_default, Extra or '',
-                                        key_types.get(Key, Key or ''),
-                                        Null != 'YES' and 'NOT NULL' or '']),
-            info['Nullable'] = (Null == 'YES') and 1 or 0
-            if Key:
-                info['Index'] = 1
-            if Key == 'PRI':
-                info['PrimaryKey'] = 1
-                info['Unique'] = 1
-            elif Key == 'UNI':
-                info['Unique'] = 1
-            r.append(info)
+        a=r.append
+        for name, type, width, ds, p, scale, null_ok in desc:
+            a({ 'Name': name,
+                'Type': self.types.get(type, '?'),
+                'Precision': p,
+                'Scale': scale,
+                'Nullable': null_ok and ' ' or "NOT NULL",
+                })
+
         return r
 
     def query(self,query_string, max_rows=1000):
-        self._use_TM and self._register()
+	if self.transactions: self._register()
         desc=None
         result=()
         db=self.db
         try:
-            self._lock.acquire()
             for qs in filter(None, map(strip,split(query_string, '\0'))):
                 qtype = upper(split(qs, None, 1)[0])
                 if qtype == "SELECT" and max_rows:
@@ -326,8 +234,12 @@ class DB(TM):
                     result=c.fetch_row(max_rows)
                 else:
                     desc=None
-        finally:
-            self._lock.release()
+                    
+        except _mysql.OperationalError, m:
+            if m[0] not in hosed_connection: raise
+            # Hm. maybe the db is hosed.  Let's restart it.
+	    db=self.db=apply(self.Database_Connection, (), self.kwargs)
+            return self.query(query_string, max_rows)
 
         if desc is None: return (),()
 
@@ -345,55 +257,14 @@ class DB(TM):
 
     def string_literal(self, s): return self.db.string_literal(s)
 
-    def close(self):
-        self.db.close()
-        self.db = None
-        
     def _begin(self, *ignored):
-        self._tlock.acquire()
-        try:
-            self.db.ping()
-            if self._transactions:
-                self.db.query("BEGIN")
-                self.db.store_result()
-            if self._mysql_lock:
-                self.db.query("SELECT GET_LOCK('%s',0)" % self._mysql_lock)
-                self.db.store_result()
-        except:
-            LOG('ZMySQLDA', ERROR, "exception during _begin",
-                error=sys.exc_info())
-            self._tlock.release()
-            raise ConflictError
+        self.db.query("BEGIN")
+	self.db.store_result()
         
-    def _finish(self, *ignored):
-        try:
-            try:
-                if self._mysql_lock:
-                    self.db.query("SELECT RELEASE_LOCK('%s')" % self._mysql_lock)
-                    self.db.store_result()
-                if self._transactions:
-                    self.db.query("COMMIT")
-                    self.db.store_result()
-            except:
-                LOG('ZMySQLDA', ERROR, "exception during _finish",
-                    error=sys.exc_info())
-                raise ConflictError
-        finally:
-            self._tlock.release()
+    def _commit(self, *ignored):
+        self.db.query("COMMIT")
+	self.db.store_result()
 
     def _abort(self, *ignored):
-        try:
-            if self._mysql_lock:
-                self.db.query("SELECT RELEASE_LOCK('%s')" % self._mysql_lock)
-                self.db.store_result()
-            if self._transactions:
-                self.db.query("ROLLBACK")
-                self.db.store_result()
-            else:
-                LOG('ZMySQLDA', ERROR, "aborting when non-transactional")
-        finally:
-            try:
-                self._tlock.release()
-            except:
-                pass
-            
+	self.db.query("ROLLBACK")
+	self.db.store_result()

@@ -6,7 +6,7 @@ Z MySQL DA
   ** NOTE **
 
   Note that the Z MySQL database adapter is compatible with MySQL
-  versions 3.22 and later (including MySQL 3.23, 4.0, and 4.1).
+  versions 3.22 and later (including MySQL 3.23).
   
   ** IMPORTANT **
   
@@ -23,11 +23,8 @@ Z MySQL DA
     This must be installed before you can use the Z MySQL DA.
     You can find this at::
 
+        http://dustman.net/andy/python/MySQLdb
         http://sourceforge.net/projects/mysql-python
-
-    You need at least version 1.0.0; 1.2.0 is recommended. If you are
-    compiling this yourself, you must use the same python executable
-    as your Zope installation uses, otherwise Zope will not find it.
 
   Connection Strings
   
