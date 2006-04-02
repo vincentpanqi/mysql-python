@@ -16,10 +16,10 @@ MySQLdb.converters module.
 __author__ = "Andy Dustman <andy@dustman.net>"
 __revision__ = """$Revision$"""[11:-2]
 version_info = (
-    1,
-    2,
     0,
-    "final",
+    9,
+    2,
+    "beta",
     1)
 if version_info[3] == "final": __version__ = "%d.%d.%d" % version_info[:3]
 else: __version__ = "%d.%d.%d%1.1s%d" % version_info[:5]
@@ -37,9 +37,9 @@ apilevel = "2.0"
 paramstyle = "format"
 
 from _mysql import *
-from MySQLdb.sets import DBAPISet, Set
-from MySQLdb.constants import FIELD_TYPE
-from MySQLdb.times import Date, Time, Timestamp, \
+from sets import DBAPISet, Set
+from constants import FIELD_TYPE
+from times import Date, Time, Timestamp, \
     DateFromTicks, TimeFromTicks, TimestampFromTicks
 
 
@@ -53,17 +53,14 @@ NUMBER    = DBAPISet(FIELD_TYPE.DECIMAL, FIELD_TYPE.DOUBLE, FIELD_TYPE.FLOAT,
 DATE      = DBAPISet(FIELD_TYPE.DATE, FIELD_TYPE.NEWDATE)
 TIME      = DBAPISet(FIELD_TYPE.TIME)
 TIMESTAMP = DBAPISet(FIELD_TYPE.TIMESTAMP, FIELD_TYPE.DATETIME)
-DATETIME  = TIMESTAMP
 ROWID     = DBAPISet()
 
-def Binary(x):
-    from array import array
-    return array('c', x)
+def Binary(x): return str(x)
 
 def Connect(*args, **kwargs):
     """Factory function for connections.Connection."""
     from connections import Connection
-    return Connection(*args, **kwargs)
+    return apply(Connection, args, kwargs)
 
 connect = Connection = Connect
 
