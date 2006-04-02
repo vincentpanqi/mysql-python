@@ -12,7 +12,7 @@ from _mysql_exceptions import Warning, Error, InterfaceError, DataError, \
      NotSupportedError, ProgrammingError
 
 
-class BaseCursor(object):
+class BaseCursor:
     
     """A base for Cursor classes. Useful attributes:
     
@@ -29,65 +29,42 @@ class BaseCursor(object):
         self.connection = connection
         self.description = None
         self.rowcount = -1
-        self.arraysize = 1
+        self.arraysize = 100
         self._executed = None
         self.lastrowid = None
         self.messages = []
         self.errorhandler = connection.errorhandler
         self._result = None
-        self._warnings = 0
-        self._info = None
         
     def __del__(self):
         self.close()
-        self.errorhandler = None
-        self._result = None
         
     def close(self):
         """Close the cursor. No further queries will be possible."""
         if not self.connection: return
-        while self.nextset(): pass
+        del self.messages[:]
+        self.nextset()
         self.connection = None
+        self.errorhandler = None
+        self._result = None
 
     def _check_executed(self):
         if not self._executed:
             self.errorhandler(self, ProgrammingError, "execute() first")
 
-    def _warning_check(self):
-        from warnings import warn
-        if self._warnings and self._info:
-            self.messages.append((self.Warning, self._info))
-            warn(self._info, self.Warning, 3)
-
     def nextset(self):
         """Advance to the next result set.
 
         Returns None if there are no more result sets.
+
+        Note that MySQL does not support multiple result sets at this
+        time.
+
         """
+        del self.messages[:]
         if self._executed:
             self.fetchall()
-        del self.messages[:]
-        
-        db = self._get_db()
-        nr = db.next_result()
-        if nr == -1:
-            return None
-        self._do_get_result()
-        self._post_get_result()
-        self._warning_check()
-        return 1
-
-    def _post_get_result(self): pass
-    
-    def _do_get_result(self):
-        db = self.connection
-        self._result = self._get_result()
-        self.rowcount = db.affected_rows()
-        self.rownumber = 0
-        self.description = self._result and self._result.describe() or None
-        self.lastrowid = db.insert_id()
-        self._warnings = db.warning_count()
-        self._info = db.info()
+        return None
     
     def setinputsizes(self, *args):
         """Does nothing, required by DB API."""
@@ -100,7 +77,7 @@ class BaseCursor(object):
             self.errorhandler(self, ProgrammingError, "cursor closed")
         return self.connection
     
-    def execute(self, query, args=None):
+    def execute(self, query, args=()):
 
         """Execute a query.
         
@@ -114,29 +91,25 @@ class BaseCursor(object):
         Returns long integer rows affected, if any
 
         """
+        del self.messages[:]
+        return self._execute(query, args)
+    
+    def _execute(self, query, args):
         from types import ListType, TupleType
         from sys import exc_info
-        del self.messages[:]
         try:
-            if args is None:
-                r = self._query(query)
-            else:
-                r = self._query(query % self.connection.literal(args))
+            r = self._query(query % self.connection.literal(args))
         except TypeError, m:
             if m.args[0] in ("not enough arguments for format string",
                              "not all arguments converted"):
-                self.messages.append((ProgrammingError, m.args[0]))
                 self.errorhandler(self, ProgrammingError, m.args[0])
             else:
-                self.messages.append((TypeError, m))
                 self.errorhandler(self, TypeError, m)
         except:
             exc, value, tb = exc_info()
             del tb
-            self.messages.append((exc, value))
             self.errorhandler(self, exc, value)
         self._executed = query
-        self._warning_check()
         return r
 
     def executemany(self, query, args):
@@ -157,45 +130,67 @@ class BaseCursor(object):
         execute().
 
         """
+        from string import join
+        from sys import exc_info
         del self.messages[:]
         if not args: return
         m = insert_values.search(query)
         if not m:
             r = 0
             for a in args:
-                r = r + self.execute(query, a)
+                r = r + self._execute(query, a)
             return r
         p = m.start(1)
         qv = query[p:]
         qargs = self.connection.literal(args)
         try:
             q = [ query % qargs[0] ]
-            q.extend([ qv % a for a in qargs[1:] ])
-        except TypeError, msg:
+            for a in qargs[1:]: q.append( qv % a )
+	except TypeError, msg:
             if msg.args[0] in ("not enough arguments for format string",
                                "not all arguments converted"):
-                self.messages.append((ProgrammingError, msg.args[0]))
                 self.errorhandler(self, ProgrammingError, msg.args[0])
             else:
-                self.messages.append((TypeError, msg))
                 self.errorhandler(self, TypeError, msg)
         except:
-            from sys import exc_info
             exc, value, tb = exc_info()
             del tb
             self.errorhandler(self, exc, value)
-        r = self._query(',\n'.join(q))
+        r = self._query(join(q,',\n'))
         self._executed = query
-        self._warning_check()
         return r
 
-    def _do_query(self, q):
+    def __do_query(self, q):
+
+        from string import split, atoi
         db = self._get_db()
         db.query(q)
-        self._do_get_result()
+        self._result = self._get_result()
+        self.rowcount = db.affected_rows()
+        self.rownumber = 0
+        self.description = self._result and self._result.describe() or None
+        self.lastrowid = db.insert_id()
+        self._check_for_warnings()
         return self.rowcount
 
-    def _query(self, q): return self._do_query(q)
+    def _check_for_warnings(self): pass
+
+    _query = __do_query
+
+    def info(self):
+        """Return some information about the last query (db.info())
+        DEPRECATED: Use messages attribute"""
+        self._check_executed()
+        if self.messages:
+            return self.messages[-1]
+        else:
+            return ''
+        
+    def insert_id(self):
+        """Return the last inserted ID on an AUTO_INCREMENT columns.
+        DEPRECATED: use lastrowid attribute"""
+        self._check_executed()
+        return self.lastrowid
     
     def _fetch_row(self, size=1):
         if not self._result:
@@ -216,8 +211,24 @@ class BaseCursor(object):
     ProgrammingError = ProgrammingError
     NotSupportedError = NotSupportedError
    
+        
+class CursorWarningMixIn:
 
-class CursorStoreResultMixIn(object):
+    """This is a MixIn class that provides the capability of raising
+    the Warning exception when something went slightly wrong with your
+    query."""
+
+    def _check_for_warnings(self):
+        from string import atoi, split
+        info = self._get_db().info()
+        if info is None:
+            return
+        warnings = atoi(split(info)[-1])
+        if warnings:
+            raise Warning, info
+
+
+class CursorStoreResultMixIn:
 
     """This is a MixIn class which causes the entire result set to be
     stored on the client side, i.e. it uses mysql_store_result(). If the
@@ -226,15 +237,17 @@ class CursorStoreResultMixIn(object):
 
     def _get_result(self): return self._get_db().store_result()
 
-    def _query(self, q):
-        rowcount = self._do_query(q)
-        self._post_get_result()
-        return rowcount
+    def close(self):
+        """Close the cursor. Further queries will not be possible."""
+        self._rows = ()
+        BaseCursor.close(self)
 
-    def _post_get_result(self):
+    def _query(self, q):
+        rowcount = self._BaseCursor__do_query(q)
         self._rows = self._fetch_row(0)
         self._result = None
-
+        return rowcount
+            
     def fetchone(self):
         """Fetches a single row from the cursor. None indicates that
         no more rows are available."""
@@ -260,6 +273,24 @@ class CursorStoreResultMixIn(object):
         self.rownumber = len(self._rows)
         return result
     
+    def seek(self, row, whence=0):
+        """seek to a given row of the result set analogously to file.seek().
+        This is non-standard extension. DEPRECATED: Use scroll method"""
+        self._check_executed()
+        if whence == 0:
+            self.rownumber = row
+        elif whence == 1:
+            self.rownumber = self.rownumber + row
+        elif whence == 2:
+            self.rownumber = len(self._rows) + row
+     
+    def tell(self):
+        """Return the current position in the result set analogously to
+        file.tell(). This is a non-standard extension. DEPRECATED:
+        use rownumber attribute"""
+        self._check_executed()
+        return self.rownumber
+
     def scroll(self, value, mode='relative'):
         """Scroll the cursor in the result set to a new position according
         to mode.
@@ -285,13 +316,20 @@ class CursorStoreResultMixIn(object):
         return iter(result)
     
 
-class CursorUseResultMixIn(object):
+class CursorUseResultMixIn:
 
     """This is a MixIn class which causes the result set to be stored
     in the server and sent row-by-row to client side, i.e. it uses
     mysql_use_result(). You MUST retrieve the entire result set and
     close() the cursor before additional queries can be peformed on
     the connection."""
+
+    def close(self):
+        """Close the cursor. No further queries can be executed."""
+        del self.messages[:]
+        self.nextset()
+        self._result = None
+        BaseCursor.close(self)
 
     def _get_result(self): return self._get_db().use_result()
 
@@ -319,7 +357,7 @@ class CursorUseResultMixIn(object):
         return r
     
 
-class CursorTupleRowsMixIn(object):
+class CursorTupleRowsMixIn:
 
     """This is a MixIn class that causes all rows to be returned as tuples,
     which is the standard form required by DB API."""
@@ -327,7 +365,7 @@ class CursorTupleRowsMixIn(object):
     _fetch_type = 0
 
 
-class CursorDictRowsMixIn(object):
+class CursorDictRowsMixIn:
 
     """This is a MixIn class that causes all rows to be returned as
     dictionaries. This is a non-standard feature."""
@@ -359,31 +397,58 @@ class CursorOldDictRowsMixIn(CursorDictRowsMixIn):
     _fetch_type = 2
 
 
-class Cursor(CursorStoreResultMixIn, CursorTupleRowsMixIn,
-             BaseCursor):
-
-    """This is the standard Cursor class that returns rows as tuples
-    and stores the result set in the client."""
-
-
-class DictCursor(CursorStoreResultMixIn, CursorDictRowsMixIn,
-                 BaseCursor):
-
-     """This is a Cursor class that returns rows as dictionaries and
-    stores the result set in the client."""
-   
-
-class SSCursor(CursorUseResultMixIn, CursorTupleRowsMixIn,
+class CursorNW(CursorStoreResultMixIn, CursorTupleRowsMixIn,
                BaseCursor):
 
-    """This is a Cursor class that returns rows as tuples and stores
-    the result set in the server."""
+    """This is a basic Cursor class that returns rows as tuples and
+    stores the result set in the client. Warnings are not raised."""
 
 
-class SSDictCursor(CursorUseResultMixIn, CursorDictRowsMixIn,
+class Cursor(CursorWarningMixIn, CursorNW):
+
+    """This is the standard Cursor class that returns rows as tuples
+    and stores the result set in the client. Warnings are raised as
+    necessary."""
+
+
+class DictCursorNW(CursorStoreResultMixIn, CursorDictRowsMixIn,
                    BaseCursor):
 
     """This is a Cursor class that returns rows as dictionaries and
-    stores the result set in the server."""
+    stores the result set in the client. Warnings are not raised."""
+
+
+class DictCursor(CursorWarningMixIn, DictCursorNW):
+
+     """This is a Cursor class that returns rows as dictionaries and
+    stores the result set in the client. Warnings are raised as
+    necessary."""
+   
+
+class SSCursorNW(CursorUseResultMixIn, CursorTupleRowsMixIn,
+                 BaseCursor):
+
+    """This is a basic Cursor class that returns rows as tuples and
+    stores the result set in the server. Warnings are not raised."""
+
+
+class SSCursor(CursorWarningMixIn, SSCursorNW):
+
+    """This is a Cursor class that returns rows as tuples and stores
+    the result set in the server. Warnings are raised as necessary."""
+
+
+class SSDictCursorNW(CursorUseResultMixIn, CursorDictRowsMixIn,
+                     BaseCursor):
+
+    """This is a Cursor class that returns rows as dictionaries and
+    stores the result set in the server. Warnings are not raised."""
+
+
+class SSDictCursor(CursorWarningMixIn, SSDictCursorNW):
+
+    """This is a Cursor class that returns rows as dictionaries and
+    stores the result set in the server. Warnings are raised as
+    necessary."""
 
 
