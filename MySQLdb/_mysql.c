@@ -1,5 +1,3 @@
-#define version_info "(1,2,0,'final',1)"
-#define __version__ "1.2.0"
 /*
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -39,6 +37,7 @@ PERFORMANCE OF THIS SOFTWARE.
 
 #include "structmember.h"
 #include "mysql.h"
+#include "my_config.h"
 #include "mysqld_error.h"
 #include "errmsg.h"
 
@@ -148,13 +147,31 @@ _mysql_Exception(_mysql_ConnectionObject *c)
 #ifdef ER_PRIMARY_CANT_HAVE_NULL
 	case ER_PRIMARY_CANT_HAVE_NULL:
 #endif
+#ifdef ER_NO_REFERENCED_ROW
+	case ER_NO_REFERENCED_ROW:
+#endif
+#ifdef ER_ROW_IS_REFERENCED
+	case ER_ROW_IS_REFERENCED:
+#endif
+#ifdef ER_CANNOT_ADD_FOREIGN
+	case ER_CANNOT_ADD_FOREIGN:
+#endif
 		e = _mysql_IntegrityError;
 		break;
 #ifdef ER_WARNING_NOT_COMPLETE_ROLLBACK
 	case ER_WARNING_NOT_COMPLETE_ROLLBACK:
+#endif
+#ifdef ER_NOT_SUPPORTED_YET
+	case ER_NOT_SUPPORTED_YET:
+#endif
+#ifdef ER_FEATURE_DISABLED
+	case ER_FEATURE_DISABLED:
+#endif
+#ifdef ER_UNKNOWN_STORAGE_ENGINE
+	case ER_UNKNOWN_STORAGE_ENGINE:
+#endif
 		e = _mysql_NotSupportedError;
 		break;
-#endif
 	default:
 		if (merr < 1000)
 			e = _mysql_InternalError;
@@ -1468,6 +1485,78 @@ _mysql_ConnectionObject_character_set_name(
 	return PyString_FromString(s);
 }
 
+#if MYSQL_VERSION_ID >= 50007
+static char _mysql_ConnectionObject_set_character_set__doc__[] =
+"Sets the default character set for the current connection.\n\
+Non-standard.\n\
+";
+
+static PyObject *
+_mysql_ConnectionObject_set_character_set(
+	_mysql_ConnectionObject *self,
+	PyObject *args)
+{
+	const char *s;
+	int err;
+	if (!PyArg_ParseTuple(args, "s", &s)) return NULL;
+	check_connection(self);
+	Py_BEGIN_ALLOW_THREADS
+	err = mysql_set_character_set(&(self->connection), s);
+	Py_END_ALLOW_THREADS
+	if (err) return _mysql_Exception(self);
+	Py_INCREF(Py_None);
+	return Py_None;
+}
+#endif
+
+#if MYSQL_VERSION_ID >= 50010
+static char _mysql_ConnectionObject_get_character_set_info__doc__[] =
+"Returns a dict with information about the current character set:\n\
+\n\
+collation\n\
+    collation name\n\
+name\n\
+    character set name\n\
+comment\n\
+    comment or descriptive name\n\
+dir\n\
+    character set directory\n\
+mbminlen\n\
+    min. length for multibyte string\n\
+mbmaxlen\n\
+    max. length for multibyte string\n\
+\n\
+Not all keys may be present, particularly dir.\n\
+\n\
+Non-standard.\n\
+";
+
+static PyObject *
+_mysql_ConnectionObject_get_character_set_info(
+	_mysql_ConnectionObject *self,
+	PyObject *args)
+{
+	PyObject *result;
+	MY_CHARSET_INFO cs;
+	
+	if (!PyArg_ParseTuple(args, "")) return NULL;
+	check_connection(self);
+	mysql_get_character_set_info(&(self->connection), &cs);
+	if (!(result = PyDict_New())) return NULL;
+	if (cs.csname)
+		PyDict_SetItemString(result, "name", PyString_FromString(cs.csname));
+	if (cs.name)
+		PyDict_SetItemString(result, "collation", PyString_FromString(cs.name));
+	if (cs.comment)
+		PyDict_SetItemString(result, "comment", PyString_FromString(cs.comment));
+	if (cs.dir)
+		PyDict_SetItemString(result, "dir", PyString_FromString(cs.dir));
+	PyDict_SetItemString(result, "mbminlen", PyInt_FromLong(cs.mbminlen));
+	PyDict_SetItemString(result, "mbmaxlen", PyInt_FromLong(cs.mbmaxlen));
+	return result;
+}
+#endif
+
 static char _mysql_get_client_info__doc__[] =
 "get_client_info() -- Returns a string that represents\n\
 the client library version.";
@@ -1931,6 +2020,11 @@ _mysql_ResultObject_row_seek(
         MYSQL_ROW_OFFSET r;
 	if (!PyArg_ParseTuple(args, "i:row_seek", &offset)) return NULL;
 	check_result_connection(self);
+	if (self->use) {
+		PyErr_SetString(_mysql_ProgrammingError,
+				"cannot be used with connection.use_result()");
+		return NULL;
+	}
 	r = mysql_row_tell(self->result);
 	mysql_row_seek(self->result, r+offset);
 	Py_INCREF(Py_None);
@@ -1947,6 +2041,11 @@ _mysql_ResultObject_row_tell(
 	MYSQL_ROW_OFFSET r;
 	if (!PyArg_ParseTuple(args, "")) return NULL;
 	check_result_connection(self);
+	if (self->use) {
+		PyErr_SetString(_mysql_ProgrammingError,
+				"cannot be used with connection.use_result()");
+		return NULL;
+	}
 	r = mysql_row_tell(self->result);
 	return PyInt_FromLong(r-self->result->data->data);
 }
@@ -2036,6 +2135,22 @@ static PyMethodDef _mysql_ConnectionObject_methods[] = {
 		METH_VARARGS,
 		_mysql_ConnectionObject_character_set_name__doc__
 	},
+#if MYSQL_VERSION_ID >= 50007
+	{
+		"set_character_set",
+		(PyCFunction)_mysql_ConnectionObject_set_character_set,
+		METH_VARARGS,
+		_mysql_ConnectionObject_set_character_set__doc__
+	},
+#endif
+#if MYSQL_VERSION_ID >= 50010
+	{
+		"get_character_set_info",
+		(PyCFunction)_mysql_ConnectionObject_get_character_set_info,
+		METH_VARARGS,
+		_mysql_ConnectionObject_get_character_set_info__doc__
+	},
+#endif
 	{
 		"close",
 		(PyCFunction)_mysql_ConnectionObject_close,
