@@ -17,8 +17,8 @@ __author__ = "Andy Dustman <andy@dustman.net>"
 __revision__ = """$Revision$"""[11:-2]
 version_info = (
     1,
-    2,
-    0,
+    1,
+    10,
     "final",
     1)
 if version_info[3] == "final": __version__ = "%d.%d.%d" % version_info[:3]
