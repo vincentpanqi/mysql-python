@@ -16,18 +16,31 @@ class BaseCursor(object):
     
     """A base for Cursor classes. Useful attributes:
     
-    description -- DB API 7-tuple describing columns in last query
-    arraysize -- default number of rows fetchmany() will fetch
+    description
+        A tuple of DB API 7-tuples describing the columns in
+        the last executed query; see PEP-249 for details.
+
+    description_flags
+        Tuple of column flags for last query, one entry per column
+        in the result set. Values correspond to those in
+        MySQLdb.constants.FLAG. See MySQL documentation (C API)
+        for more information. Non-standard extension.
     
-    See the MySQL docs for more information."""
+    arraysize
+        default number of rows fetchmany() will fetch
+
+    """
 
     from _mysql_exceptions import MySQLError, Warning, Error, InterfaceError, \
          DatabaseError, DataError, OperationalError, IntegrityError, \
          InternalError, ProgrammingError, NotSupportedError
 
     def __init__(self, connection):
-        self.connection = connection
+        from weakref import proxy
+    
+        self.connection = proxy(connection)
         self.description = None
+        self.description_flags = None
         self.rowcount = -1
         self.arraysize = 1
         self._executed = None
@@ -37,6 +50,7 @@ class BaseCursor(object):
         self._result = None
         self._warnings = 0
         self._info = None
+        self.rownumber = None
         
     def __del__(self):
         self.close()
@@ -55,9 +69,18 @@ class BaseCursor(object):
 
     def _warning_check(self):
         from warnings import warn
-        if self._warnings and self._info:
-            self.messages.append((self.Warning, self._info))
-            warn(self._info, self.Warning, 3)
+        if self._warnings:
+            warnings = self._get_db().show_warnings()
+            if warnings:
+                # This is done in two loops in case
+                # Warnings are set to raise exceptions.
+                for w in warnings:
+                    self.messages.append((self.Warning, w))
+                for w in warnings:
+                    warn(w[-1], self.Warning, 3)
+            elif self._info:
+                self.messages.append((self.Warning, self._info))
+                warn(self._info, self.Warning, 3)
 
     def nextset(self):
         """Advance to the next result set.
@@ -80,11 +103,12 @@ class BaseCursor(object):
     def _post_get_result(self): pass
     
     def _do_get_result(self):
-        db = self.connection
+        db = self._get_db()
         self._result = self._get_result()
         self.rowcount = db.affected_rows()
         self.rownumber = 0
         self.description = self._result and self._result.describe() or None
+        self.description_flags = self._result and self._result.field_flags() or None
         self.lastrowid = db.insert_id()
         self._warnings = db.warning_count()
         self._info = db.info()
@@ -117,11 +141,13 @@ class BaseCursor(object):
         from types import ListType, TupleType
         from sys import exc_info
         del self.messages[:]
+        db = self._get_db()
+        charset = db.character_set_name()
+        query = query.encode(charset)
+        if args is not None:
+            query = query % db.literal(args)
         try:
-            if args is None:
-                r = self._query(query)
-            else:
-                r = self._query(query % self.connection.literal(args))
+            r = self._query(query)
         except TypeError, m:
             if m.args[0] in ("not enough arguments for format string",
                              "not all arguments converted"):
@@ -158,6 +184,7 @@ class BaseCursor(object):
 
         """
         del self.messages[:]
+        db = self._get_db()
         if not args: return
         m = insert_values.search(query)
         if not m:
@@ -166,8 +193,10 @@ class BaseCursor(object):
                 r = r + self.execute(query, a)
             return r
         p = m.start(1)
+        charset = db.character_set_name()
+        query = query.encode(charset)
         qv = query[p:]
-        qargs = self.connection.literal(args)
+        qargs = db.literal(args)
         try:
             q = [ query % qargs[0] ]
             q.extend([ qv % a for a in qargs[1:] ])
@@ -185,12 +214,62 @@ class BaseCursor(object):
             del tb
             self.errorhandler(self, exc, value)
         r = self._query(',\n'.join(q))
-        self._executed = query
         self._warning_check()
         return r
+    
+    def callproc(self, procname, args=()):
 
+        """Execute stored procedure procname with args
+        
+        procname -- string, name of procedure to execute on server
+
+        args -- Sequence of parameters to use with procedure
+
+        Returns the original args.
+
+        Compatibility warning: PEP-249 specifies that any modified
+        parameters must be returned. This is currently impossible
+        as they are only available by storing them in a server
+        variable and then retrieved by a query. Since stored
+        procedures return zero or more result sets, there is no
+        reliable way to get at OUT or INOUT parameters via callproc.
+        The server variables are named @_procname_n, where procname
+        is the parameter above and n is the position of the parameter
+        (from zero). Once all result sets generated by the procedure
+        have been fetched, you can issue a SELECT @_procname_0, ...
+        query using .execute() to get any OUT or INOUT values.
+
+        Compatibility warning: The act of calling a stored procedure
+        itself creates an empty result set. This appears after any
+        result sets generated by the procedure. This is non-standard
+        behavior with respect to the DB-API. Be sure to use nextset()
+        to advance through all result sets; otherwise you may get
+        disconnected.
+        """
+
+        from types import UnicodeType
+        db = self._get_db()
+        charset = db.character_set_name()
+        for index, arg in enumerate(args):
+            q = "SET @_%s_%d=%s" % (procname, index,
+                                         db.literal(arg))
+            if type(q) is UnicodeType:
+                q = q.encode(charset)
+            self._query(q)
+            self.nextset()
+            
+        q = "CALL %s(%s)" % (procname,
+                             ','.join(['@_%s_%d' % (procname, i)
+                                       for i in range(len(args))]))
+        if type(q) is UnicodeType:
+            q = q.encode(charset)
+        self._query(q)
+        self._warning_check()
+        return args
+    
     def _do_query(self, q):
         db = self._get_db()
+        self._last_executed = q
         db.query(q)
         self._do_get_result()
         return self.rowcount
@@ -256,7 +335,10 @@ class CursorStoreResultMixIn(object):
     def fetchall(self):
         """Fetchs all available rows from the cursor."""
         self._check_executed()
-        result = self.rownumber and self._rows[self.rownumber:] or self._rows
+        if self.rownumber:
+            result = self._rows[self.rownumber:]
+        else:
+            result = self._rows
         self.rownumber = len(self._rows)
         return result
     
@@ -317,6 +399,15 @@ class CursorUseResultMixIn(object):
         r = self._fetch_row(0)
         self.rownumber = self.rownumber + len(r)
         return r
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        row = self.fetchone()
+        if row is None:
+            raise StopIteration
+        return row
     
 
 class CursorTupleRowsMixIn(object):
@@ -336,17 +427,26 @@ class CursorDictRowsMixIn(object):
 
     def fetchoneDict(self):
         """Fetch a single row as a dictionary. Deprecated:
-        Use fetchone() instead."""
+        Use fetchone() instead. Will be removed in 1.3."""
+        from warnings import warn
+        warn("fetchoneDict() is non-standard and will be removed in 1.3",
+             DeprecationWarning, 2)
         return self.fetchone()
 
     def fetchmanyDict(self, size=None):
         """Fetch several rows as a list of dictionaries. Deprecated:
-        Use fetchmany() instead."""
+        Use fetchmany() instead. Will be removed in 1.3."""
+        from warnings import warn
+        warn("fetchmanyDict() is non-standard and will be removed in 1.3",
+             DeprecationWarning, 2)
         return self.fetchmany(size)
 
     def fetchallDict(self):
         """Fetch all available rows as a list of dictionaries. Deprecated:
-        Use fetchall() instead."""
+        Use fetchall() instead. Will be removed in 1.3."""
+        from warnings import warn
+        warn("fetchallDict() is non-standard and will be removed in 1.3",
+             DeprecationWarning, 2)
         return self.fetchall()
 
 
