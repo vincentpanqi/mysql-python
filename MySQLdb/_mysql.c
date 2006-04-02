@@ -1,5 +1,5 @@
-#define version_info "(1,2,0,'final',1)"
-#define __version__ "1.2.0"
+#define version_info "(1,1,8,'final',1)"
+#define __version__ "1.1.8"
 /*
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -423,9 +423,10 @@ _mysql_ConnectionObject_Initialize(
 	PyObject *args,
 	PyObject *kwargs)
 {
-	MYSQL *conn = NULL;
+	MYSQL *conn=NULL;
 	PyObject *conv = NULL;
 	PyObject *ssl = NULL;
+	PyObject *value = NULL;
 #if HAVE_OPENSSL
 	char *key = NULL, *cert = NULL, *ca = NULL,
 		*capath = NULL, *cipher = NULL;
@@ -440,10 +441,9 @@ _mysql_ConnectionObject_Initialize(
 				  "named_pipe", "init_command",
 				  "read_default_file", "read_default_group",
 				  "client_flag", "ssl",
-				  "local_infile",
 				  NULL } ;
 	int connect_timeout = 0;
-	int compress = -1, named_pipe = -1, local_infile = -1;
+	int compress = -1, named_pipe = -1;
 	char *init_command=NULL,
 	     *read_default_file=NULL,
 	     *read_default_group=NULL;
@@ -451,7 +451,7 @@ _mysql_ConnectionObject_Initialize(
 	self->converter = NULL;
 	self->open = 0;
 	check_server_init(-1);
-	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|ssssisOiiisssiOi:connect",
+	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|ssssisOiiisssiO:connect",
 					 kwlist,
 					 &host, &user, &passwd, &db,
 					 &port, &unix_socket, &conv,
@@ -459,9 +459,7 @@ _mysql_ConnectionObject_Initialize(
 					 &compress, &named_pipe,
 					 &init_command, &read_default_file,
 					 &read_default_group,
-					 &client_flag, &ssl,
-					 &local_infile
-					 ))
+					 &client_flag, &ssl))
 		return -1;
 
 	if (!conv) 
@@ -480,7 +478,6 @@ _mysql_ConnectionObject_Initialize(
 	
 	if (ssl) {
 #if HAVE_OPENSSL
-		PyObject *value = NULL;
 		_stringsuck(ca, value, ssl);
 		_stringsuck(capath, value, ssl);
 		_stringsuck(cert, value, ssl);
@@ -513,9 +510,6 @@ _mysql_ConnectionObject_Initialize(
 	if (read_default_group != NULL)
 		mysql_options(&(self->connection), MYSQL_READ_DEFAULT_GROUP, read_default_group);
 
-	if (local_infile != -1)
-		mysql_options(&(self->connection), MYSQL_OPT_LOCAL_INFILE, (char *) &local_infile);
-
 #if HAVE_OPENSSL
 	if (ssl)
 		mysql_ssl_set(&(self->connection),
@@ -524,7 +518,7 @@ _mysql_ConnectionObject_Initialize(
 
 	conn = mysql_real_connect(&(self->connection), host, user, passwd, db,
 				  port, unix_socket, client_flag);
-
+  error:
 	Py_END_ALLOW_THREADS ;
 
 	if (!conn) {
@@ -546,53 +540,21 @@ static char _mysql_connect__doc__[] =
 keyword parameters strongly recommended. Consult the\n\
 MySQL C API documentation for more details.\n\
 \n\
-host\n\
-  string, host to connect\n\
-\n\
-user\n\
-  string, user to connect as\n\
-\n\
-passwd\n\
-  string, password to use\n\
-\n\
-db\n\
-  string, database to use\n\
-\n\
-port\n\
-  integer, TCP/IP port to connect to\n\
-\n\
-unix_socket\n\
-  string, location of unix_socket (UNIX-ish only)\n\
-\n\
-conv\n\
-  mapping, maps MySQL FIELD_TYPE.* to Python functions which\n\
-  convert a string to the appropriate Python type\n\
-\n\
-connect_timeout\n\
-  number of seconds to wait before the connection\n\
-  attempt fails.\n\
-\n\
-compress\n\
-  if set, gzip compression is enabled\n\
-\n\
-named_pipe\n\
-  if set, connect to server via named pipe (Windows only)\n\
-\n\
-init_command\n\
-  command which is run once the connection is created\n\
-\n\
-read_default_file\n\
-  see the MySQL documentation for mysql_options()\n\
-\n\
-read_default_group\n\
-  see the MySQL documentation for mysql_options()\n\
-\n\
-client_flag\n\
-  client flags from MySQLdb.constants.CLIENT\n\
-\n\
-load_infile\n\
-  int, non-zero enables LOAD LOCAL INFILE, zero disables\n\
-\n\
+host -- string, host to connect\n\
+user -- string, user to connect as\n\
+passwd -- string, password to use\n\
+db -- string, database to use\n\
+port -- integer, TCP/IP port to connect to\n\
+unix_socket -- string, location of unix_socket (UNIX-ish only)\n\
+conv -- mapping, maps MySQL FIELD_TYPE.* to Python functions which\n\
+        convert a string to the appropriate Python type\n\
+connect_timeout -- number of seconds to wait before the connection\n\
+        attempt fails.\n\
+compress -- if set, gzip compression is enabled\n\
+named_pipe -- if set, connect to server via named pipe (Windows only)\n\
+init_command -- command which is run once the connection is created\n\
+read_default_file -- see the MySQL documentation for mysql_options()\n\
+read_default_group -- see the MySQL documentation for mysql_options()\n\
 ";
 
 static PyObject *
@@ -640,9 +602,8 @@ _mysql_ConnectionObject_close(
 	_mysql_ConnectionObject *self,
 	PyObject *args)
 {
-	if (args) {
-		if (!PyArg_ParseTuple(args, "")) return NULL;
-	}
+	if (!args) return NULL;
+	if (!PyArg_ParseTuple(args, "")) return NULL;
 	if (self->open) {
 		Py_BEGIN_ALLOW_THREADS
 		mysql_close(&(self->connection));
@@ -840,7 +801,7 @@ _mysql_ConnectionObject_set_server_option(
 static char _mysql_ConnectionObject_sqlstate__doc__[] =
 "Returns a string containing the SQLSTATE error code\n\
 for the last error. The error code consists of five characters.\n\
-'00000' means \"no error.\" The values are specified by ANSI SQL\n\
+'00000' means ``no error.'' The values are specified by ANSI SQL\n\
 and ODBC. For a list of possible values, see section 23\n\
 Error Handling in MySQL in the MySQL Manual.\n\
 \n\
