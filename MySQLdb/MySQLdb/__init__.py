@@ -17,7 +17,7 @@ __author__ = "Andy Dustman <andy@dustman.net>"
 __revision__ = """$Revision$"""[11:-2]
 version_info = (
     1,
-    2,
+    1,
     0,
     "final",
     1)
@@ -56,9 +56,7 @@ TIMESTAMP = DBAPISet(FIELD_TYPE.TIMESTAMP, FIELD_TYPE.DATETIME)
 DATETIME  = TIMESTAMP
 ROWID     = DBAPISet()
 
-def Binary(x):
-    from array import array
-    return array('c', x)
+def Binary(x): return str(x)
 
 def Connect(*args, **kwargs):
     """Factory function for connections.Connection."""
