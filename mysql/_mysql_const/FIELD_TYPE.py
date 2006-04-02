@@ -1,10 +1,3 @@
-"""MySQL FIELD_TYPE Constants
-
-These constants represent the various column (field) types that are
-supported by MySQL.
-
-"""
-
 DECIMAL = 0
 TINY = 1
 SHORT = 2

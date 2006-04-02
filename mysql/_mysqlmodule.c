@@ -1,4 +1,3 @@
-static char _mysql__version__[] = "0.3.6";
 /*
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -41,7 +40,6 @@ PERFORMANCE OF THIS SOFTWARE.
 #include "mysqld_error.h"
 #include "errmsg.h"
 
-static PyObject *_mysql_MySQLError;
 static PyObject *_mysql_Warning;
 static PyObject *_mysql_Error;
 static PyObject *_mysql_DatabaseError;
@@ -60,15 +58,12 @@ typedef struct {
 	PyObject *converter;
 } _mysql_ConnectionObject;
 
-#define check_connection(c) if (!(c->open)) _mysql_Exception(c)
-#define result_connection(r) ((_mysql_ConnectionObject *)r->conn)
-#define check_result_connection(r) if (!(result_connection(r)->open)) _mysql_Exception(result_connection(r))
-
 extern PyTypeObject _mysql_ConnectionObject_Type;
 
 typedef struct {
 	PyObject_HEAD
 	PyObject *conn;
+	MYSQL *connection;
 	MYSQL_RES *result;
 	int nfields;
 	int use;
@@ -84,50 +79,23 @@ _mysql_Exception(_mysql_ConnectionObject *c)
 	int merr;
 
 	if (!(t = PyTuple_New(2))) return NULL;
-	if (!(c->open)) {
-		e = _mysql_InternalError;
-		PyTuple_SET_ITEM(t, 0, PyInt_FromLong(-1L));
-		PyTuple_SET_ITEM(t, 1, PyString_FromString("connection is closed"));
-		PyErr_SetObject(e, t);
-		Py_DECREF(t);
-		return NULL;
-	}
 	merr = mysql_errno(&(c->connection));
 	if (!merr)
 		e = _mysql_InterfaceError;
 	else if (merr > CR_MAX_ERROR) {
 		PyTuple_SET_ITEM(t, 0, PyInt_FromLong(-1L));
 		PyTuple_SET_ITEM(t, 1, PyString_FromString("error totally whack"));
-		PyErr_SetObject(_mysql_InterfaceError, t);
+		PyErr_SetObject(_mysql_Error, t);
 		Py_DECREF(t);
 		return NULL;
 	}
 	else switch (merr) {
 	case CR_COMMANDS_OUT_OF_SYNC:
-	case ER_DB_CREATE_EXISTS:
-	case ER_SYNTAX_ERROR:
-	case ER_NO_SUCH_TABLE:
-	case ER_WRONG_DB_NAME:
-	case ER_WRONG_TABLE_NAME:
-	case ER_FIELD_SPECIFIED_TWICE:
-	case ER_INVALID_GROUP_FUNC_USE:
-	case ER_UNSUPPORTED_EXTENSION:
-	case ER_TABLE_MUST_HAVE_COLUMNS:
-#ifdef ER_CANT_DO_THIS_DURING_AN_TRANSACTION
-	case ER_CANT_DO_THIS_DURING_AN_TRANSACTION:
-#endif
 		e = _mysql_ProgrammingError;
 		break;
 	case ER_DUP_ENTRY:
-	case ER_DUP_UNIQUE:
-	case ER_PRIMARY_CANT_HAVE_NULL:
 		e = _mysql_IntegrityError;
 		break;
-#ifdef ER_WARNING_NOT_COMPLETE_ROLLBACK
-	case ER_WARNING_NOT_COMPLETE_ROLLBACK:
-		e = _mysql_NotSupportedError;
-		break;
-#endif
 	default:
 		if (merr < 1000)
 			e = _mysql_InternalError;
@@ -155,6 +123,7 @@ _mysql_ResultObject_New(
 	_mysql_ResultObject *r;
 	if (!(r = PyObject_NEW(_mysql_ResultObject, &_mysql_ResultObject_Type)))
 		return NULL;
+	r->connection = &conn->connection;
 	r->conn = (PyObject *) conn;
 	r->converter = NULL;
 	r->use = use;
@@ -187,27 +156,6 @@ _mysql_ResultObject_New(
 	return r;
 }
 
-static char _mysql_connect__doc__[] =
-"connect() -- takes a number of keyword arguments and\n\
-returns a MYSQL connection object.\n\
-\n\
-host -- string, host to connect to or NULL pointer (localhost)\n\
-user -- string, user to connect as or NULL (your username)\n\
-passwd -- string, password to use or NULL (no password)\n\
-db -- string, database to use or NULL (no DB selected)\n\
-port -- integer, TCP/IP port to connect to or default MySQL port\n\
-unix_socket -- string, location of unix_socket to use or use TCP\n\
-client_flags -- integer, flags to use or 0 (see MySQL docs)\n\
-conv -- dictionary, maps MySQL FIELD_TYPE.* to Python functions which\n\
-        convert a string to the appropriate Python type\n\
-connect_time -- number of seconds to wait before the connection\n\
-        attempt fails.\n\
-compress -- if set, compression is enabled\n\
-init_command -- command which is run once the connection is created\n\
-read_default_file -- see the MySQL documentation for mysql_options()\n\
-read_default_group -- see the MySQL documentation for mysql_options()\n\
-";
-
 static PyObject *
 _mysql_connect(
 	PyObject *self,
@@ -234,6 +182,7 @@ _mysql_connect(
 	_mysql_ConnectionObject *c = PyObject_NEW(_mysql_ConnectionObject,
 					      &_mysql_ConnectionObject_Type);
 	if (c == NULL) return NULL;
+	c->open = 0;
 	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|ssssisOiiisss:connect",
 					 kwlist,
 					 &host, &user, &passwd, &db,
@@ -274,13 +223,12 @@ _mysql_connect(
 	conn = mysql_real_connect(&(c->connection), host, user, passwd, db,
 				  port, unix_socket, client_flag);
 	Py_END_ALLOW_THREADS ;
-	c->open = 1;
 	if (!conn) {
 		_mysql_Exception(c);
-		c->open = 0;
 		Py_DECREF(c);
 		return NULL;
 	}
+	c->open = 1;
 	return (PyObject *) c;
 }
 
@@ -290,12 +238,10 @@ _mysql_ConnectionObject_close(
 	PyObject *args)
 {
 	if (!PyArg_NoArgs(args)) return NULL;
-	if (self->open) {
-		Py_BEGIN_ALLOW_THREADS
-		mysql_close(&(self->connection));
-		Py_END_ALLOW_THREADS
-		self->open = 0;
-	}
+	Py_BEGIN_ALLOW_THREADS
+	mysql_close(&(self->connection));
+        Py_END_ALLOW_THREADS
+	self->open = 0;
 	Py_INCREF(Py_None);
 	return Py_None;
 }
@@ -306,16 +252,9 @@ _mysql_ConnectionObject_affected_rows(
 	PyObject *args)
 {
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_connection(self);
 	return PyLong_FromUnsignedLongLong(mysql_affected_rows(&(self->connection)));
 }
 
-static char _mysql_debug__doc__[] =
-"debug(s) -- Does a DBUG_PUSH with the given string.\n\
-mysql_debug() uses the Fred Fish debug library.\n\
-To use this function, you must compile the client library to\n\
-support debugging.\n\
-";
 static PyObject *
 _mysql_debug(
 	PyObject *self,
@@ -335,7 +274,6 @@ _mysql_ConnectionObject_dump_debug_info(
 {
 	int err;
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_connection(self);
 	Py_BEGIN_ALLOW_THREADS
 	err = mysql_dump_debug_info(&(self->connection));
 	Py_END_ALLOW_THREADS
@@ -350,7 +288,6 @@ _mysql_ConnectionObject_errno(
 	PyObject *args)
 {
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_connection(self);
 	return PyInt_FromLong((long)mysql_errno(&(self->connection)));
 }
 
@@ -360,19 +297,9 @@ _mysql_ConnectionObject_error(
 	PyObject *args)
 {
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_connection(self);
 	return PyString_FromString(mysql_error(&(self->connection)));
 }
 
-static char _mysql_escape_string__doc__[] =
-"escape_string(s) -- quote any SQL-interpreted characters in string s.\n\
-\n\
-This function is somewhat deprecated. mysql_real_escape_string() was\n\
-introduced in MySQL-3.23. The new version handles character sets\n\
-correctly, but requires a connection object to work. Therefore,\n\
-escape_string() has become a method of the connection object. It is\n\
-retained as a module function for compatibility reasons. Use the\n\
-method version of this function if at all possible.";
 static PyObject *
 _mysql_escape_string(
 	_mysql_ConnectionObject *self,
@@ -388,10 +315,8 @@ _mysql_escape_string(
 #if MYSQL_VERSION_ID < 32321
 	len = mysql_escape_string(out, in, size);
 #else
-	if (self) {
-		check_connection(self);
+	if (self)
 		len = mysql_real_escape_string(&(self->connection), out, in, size);
-	}
 	else
 		len = mysql_escape_string(out, in, size);
 #endif
@@ -399,28 +324,22 @@ _mysql_escape_string(
 	return (str);
 }
 
-static char _mysql_string_literal__doc__[] =
-"string_literal(obj) -- converts object obj into a SQL string literal.\n\
-This means, any special SQL characters are escaped, and it is enclosed\n\
-within single quotes. In other words, it performs:\n\
-\n\
-\"'%s'\" % escape_string(str(obj))\n\
-\n\
-This function is somewhat deprecated. mysql_real_escape_string() was\n\
-introduced in MySQL-3.23. The new version handles character sets\n\
-correctly, but requires a connection object to work. Therefore,\n\
-string_literal() has become a method of the connection object. It is\n\
-retained as a module function for compatibility reasons. Use the\n\
-method version of this function if at all possible.";
+/* In 3.23.x, mysql_escape_string() is deprecated for
+ * mysql_real_escape_string, which takes a connection
+ * as the first arg, so this needs to be a connection
+ * method. For backwards compatibility, it also needs
+ * to be a module function.
+ */
+
 static PyObject *
 _mysql_string_literal(
 	_mysql_ConnectionObject *self,
 	PyObject *args)
 {
-	PyObject *str, *s, *o, *d;
+	PyObject *str, *s, *o;
 	char *in, *out;
 	int len, size;
-	if (!PyArg_ParseTuple(args, "O|O:string_literal", &o, &d)) return NULL;
+	if (!PyArg_ParseTuple(args, "O:string_literal", &o)) return NULL;
 	s = PyObject_Str(o);
 	in = PyString_AsString(s);
 	size = PyString_GET_SIZE(s);
@@ -430,10 +349,8 @@ _mysql_string_literal(
 #if MYSQL_VERSION_ID < 32321
 	len = mysql_escape_string(out+1, in, size);
 #else
-	if (self) {
-		check_connection(self);
+	if (self)
 		len = mysql_real_escape_string(&(self->connection), out+1, in, size);
-	}
 	else
 		len = mysql_escape_string(out+1, in, size);
 #endif
@@ -471,10 +388,6 @@ error:
 	return quoted;
 }
 
-static char _mysql_escape__doc__[] =
-"escape(obj, dict) -- escape any special characters in object obj\n\
-using mapping dict to provide quoting functions for each type.\n\
-Returns a SQL literal string.";
 static PyObject *
 _mysql_escape(
 	PyObject *self,
@@ -491,10 +404,6 @@ _mysql_escape(
 	return _escape_item(o, d);
 }
 
-static char _mysql_escape_sequence__doc__[] =
-"escape_sequence(seq, dict) -- escape any special characters in sequence\n\
-seq using mapping dict to provide quoting functions for each type.\n\
-Returns a tuple of escaped items.";
 static PyObject *
 _mysql_escape_sequence(
 	PyObject *self,
@@ -525,10 +434,6 @@ _mysql_escape_sequence(
 	return NULL;
 }
 
-static char _mysql_escape_dict__doc__[] =
-"escape_sequence(d, dict) -- escape any special characters in\n\
-dictionary d using mapping dict to provide quoting functions for each type.\n\
-Returns a dictionary of escaped items.";
 static PyObject *
 _mysql_escape_dict(
 	PyObject *self,
@@ -565,7 +470,6 @@ _mysql_ResultObject_describe(
 	MYSQL_FIELD *fields;
 	unsigned int i, n;
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_result_connection(self);
 	n = mysql_num_fields(self->result);
 	fields = mysql_fetch_fields(self->result);
 	if (!(d = PyTuple_New(n))) return NULL;
@@ -597,7 +501,6 @@ _mysql_ResultObject_field_flags(
 	MYSQL_FIELD *fields;
 	unsigned int i, n;
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_result_connection(self);
 	n = mysql_num_fields(self->result);
 	fields = mysql_fetch_fields(self->result);
 	if (!(d = PyTuple_New(n))) return NULL;
@@ -745,7 +648,7 @@ typedef PyObject *_PYFUNC(_mysql_ResultObject *, MYSQL_ROW);
 int
 _mysql__fetch_row(
 	_mysql_ResultObject *self,
-	PyObject **r,
+	PyObject *r,
 	int skiprows,
 	int maxrows,
 	_PYFUNC *convert_row)
@@ -762,17 +665,17 @@ _mysql__fetch_row(
 			row = mysql_fetch_row(self->result);
 			Py_END_ALLOW_THREADS;
 		}
-		if (!row && mysql_errno(&(((_mysql_ConnectionObject *)(self->conn))->connection))) {
+		if (!row && mysql_errno(self->connection)) {
 			_mysql_Exception((_mysql_ConnectionObject *)self->conn);
 			goto error;
 		}
 		if (!row) {
-			if (_PyTuple_Resize(r, i, 0) == -1) goto error;
+			if (_PyTuple_Resize(&r, i, 0) == -1) goto error;
 			break;
 		}
 		v = convert_row(self, row);
 		if (!v) goto error;
-		PyTuple_SET_ITEM(*r, i, v);
+		PyTuple_SET_ITEM(r, i, v);
 	}
 	return i-skiprows;
   error:
@@ -800,7 +703,6 @@ _mysql_ResultObject_fetch_row(
 	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|ii:fetch_row", kwlist,
 					 &maxrows, &how))
 		return NULL;
-	check_result_connection(self);
 	if (how < 0 || how >= sizeof(row_converters)) {
 		PyErr_SetString(PyExc_ValueError, "how out of range");
 		return NULL;
@@ -808,7 +710,7 @@ _mysql_ResultObject_fetch_row(
 	convert_row = row_converters[how];
 	if (maxrows) {
 		if (!(r = PyTuple_New(maxrows))) goto error;
-		rowsadded = _mysql__fetch_row(self, &r, skiprows, maxrows, 
+		rowsadded = _mysql__fetch_row(self, r, skiprows, maxrows, 
 				convert_row);
 		if (rowsadded == -1) goto error;
 	} else {
@@ -816,7 +718,7 @@ _mysql_ResultObject_fetch_row(
 			maxrows = 1000;
 			if (!(r = PyTuple_New(maxrows))) goto error;
 			while (1) {
-				rowsadded = _mysql__fetch_row(self, &r, skiprows,
+				rowsadded = _mysql__fetch_row(self, r, skiprows,
 						maxrows, convert_row);
 				if (rowsadded == -1) goto error;
 				skiprows += rowsadded;
@@ -826,7 +728,7 @@ _mysql_ResultObject_fetch_row(
 			/* XXX if overflow, maxrows<0? */
 			maxrows = (int) mysql_num_rows(self->result);
 			if (!(r = PyTuple_New(maxrows))) goto error;
-			rowsadded = _mysql__fetch_row(self, &r, 0,
+			rowsadded = _mysql__fetch_row(self, r, 0,
 					maxrows, convert_row);
 			if (rowsadded == -1) goto error;
 		}
@@ -851,7 +753,6 @@ _mysql_ConnectionObject_change_user(
 	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|ss:change_user",
 					 kwlist, &user, &pwd, &db))
 		return NULL;
-	check_connection(self);
 	Py_BEGIN_ALLOW_THREADS
 	r = mysql_change_user(&(self->connection), user, pwd, db);
 	Py_END_ALLOW_THREADS
@@ -869,15 +770,11 @@ _mysql_ConnectionObject_character_set_name(
 {
 	const char *s;
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_connection(self);
 	s = mysql_character_set_name(&(self->connection));
 	return PyString_FromString(s);
 }
 #endif
 
-static char _mysql_get_client_info__doc__[] =
-"get_client_info() -- Returns a string that represents\n\
-the client library version.";
 static PyObject *
 _mysql_get_client_info(
 	PyObject *self,
@@ -888,12 +785,21 @@ _mysql_get_client_info(
 }
 
 static PyObject *
+_mysql_ConnectionObject_commit(
+	_mysql_ConnectionObject *self,
+	PyObject *args)
+{
+	if (!PyArg_NoArgs(args)) return NULL;
+        Py_INCREF(Py_None);
+	return Py_None;
+}
+
+static PyObject *
 _mysql_ConnectionObject_get_host_info(
 	_mysql_ConnectionObject *self,
 	PyObject *args)
 {
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_connection(self);
 	return PyString_FromString(mysql_get_host_info(&(self->connection)));
 }
 
@@ -903,7 +809,6 @@ _mysql_ConnectionObject_get_proto_info(
 	PyObject *args)
 {
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_connection(self);
 	return PyInt_FromLong((long)mysql_get_proto_info(&(self->connection)));
 }
 
@@ -913,7 +818,6 @@ _mysql_ConnectionObject_get_server_info(
 	PyObject *args)
 {
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_connection(self);
 	return PyString_FromString(mysql_get_server_info(&(self->connection)));
 }
 
@@ -924,7 +828,6 @@ _mysql_ConnectionObject_info(
 {
 	char *s;
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_connection(self);
 	s = mysql_info(&(self->connection));
 	if (s) return PyString_FromString(s);
 	Py_INCREF(Py_None);
@@ -938,7 +841,6 @@ _mysql_ConnectionObject_insert_id(
 {
 	my_ulonglong r;
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_connection(self);
 	Py_BEGIN_ALLOW_THREADS
 	r = mysql_insert_id(&(self->connection));
 	Py_END_ALLOW_THREADS
@@ -953,7 +855,6 @@ _mysql_ConnectionObject_kill(
 	unsigned long pid;
 	int r;
 	if (!PyArg_ParseTuple(args, "i:kill", &pid)) return NULL;
-	check_connection(self);
 	Py_BEGIN_ALLOW_THREADS
 	r = mysql_kill(&(self->connection), pid);
 	Py_END_ALLOW_THREADS
@@ -971,7 +872,6 @@ _mysql_ConnectionObject_list_dbs(
 	char *wild = NULL;
 
 	if (!PyArg_ParseTuple(args, "|s:list_dbs", &wild)) return NULL;
-	check_connection(self);
 	Py_BEGIN_ALLOW_THREADS
         result = mysql_list_dbs(&(self->connection), wild);
 	Py_END_ALLOW_THREADS
@@ -989,7 +889,6 @@ _mysql_ConnectionObject_list_fields(
 	char *wild = NULL, *table;
 
 	if (!PyArg_ParseTuple(args, "s|s:list_fields", &table, &wild)) return NULL;
-	check_connection(self);
 	Py_BEGIN_ALLOW_THREADS
         result = mysql_list_fields(&(self->connection), table, wild);
 	Py_END_ALLOW_THREADS
@@ -1006,7 +905,6 @@ _mysql_ConnectionObject_list_processes(
 	MYSQL_RES *result;
 
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_connection(self);
 	Py_BEGIN_ALLOW_THREADS
         result = mysql_list_processes(&(self->connection));
 	Py_END_ALLOW_THREADS
@@ -1024,7 +922,6 @@ _mysql_ConnectionObject_list_tables(
 	char *wild = NULL;
 
 	if (!PyArg_ParseTuple(args, "|s:list_tables", &wild)) return NULL;
-	check_connection(self);
 	Py_BEGIN_ALLOW_THREADS
         result = mysql_list_tables(&(self->connection), wild);
 	Py_END_ALLOW_THREADS
@@ -1039,7 +936,6 @@ _mysql_ConnectionObject_field_count(
 	PyObject *args)
 {
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_connection(self);
 #if MYSQL_VERSION_ID < 32224
 	return PyInt_FromLong((long)mysql_num_fields(&(self->connection)));
 #else
@@ -1053,7 +949,6 @@ _mysql_ResultObject_num_fields(
 	PyObject *args)
 {
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_result_connection(self);
 	return PyInt_FromLong((long)mysql_num_fields(self->result));
 }	
 
@@ -1063,7 +958,6 @@ _mysql_ResultObject_num_rows(
 	PyObject *args)
 {
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_result_connection(self);
 	return PyLong_FromUnsignedLongLong(mysql_num_rows(self->result));
 }	
 
@@ -1074,7 +968,6 @@ _mysql_ConnectionObject_ping(
 {
 	int r;
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_connection(self);
 	Py_BEGIN_ALLOW_THREADS
 	r = mysql_ping(&(self->connection));
 	Py_END_ALLOW_THREADS
@@ -1091,7 +984,6 @@ _mysql_ConnectionObject_query(
 	char *query;
 	int len, r;
 	if (!PyArg_ParseTuple(args, "s#:query", &query, &len)) return NULL;
-	check_connection(self);
 	Py_BEGIN_ALLOW_THREADS
 	r = mysql_real_query(&(self->connection), query, len);
 	Py_END_ALLOW_THREADS
@@ -1108,7 +1000,6 @@ _mysql_ConnectionObject_select_db(
 	char *db;
 	int r;
 	if (!PyArg_ParseTuple(args, "s:select_db", &db)) return NULL;
-	check_connection(self);
 	Py_BEGIN_ALLOW_THREADS
 	r = mysql_select_db(&(self->connection), db);
 	Py_END_ALLOW_THREADS
@@ -1124,7 +1015,6 @@ _mysql_ConnectionObject_shutdown(
 {
 	int r;
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_connection(self);
 	Py_BEGIN_ALLOW_THREADS
 	r = mysql_shutdown(&(self->connection));
 	Py_END_ALLOW_THREADS
@@ -1140,7 +1030,6 @@ _mysql_ConnectionObject_stat(
 {
 	char *s;
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_connection(self);
 	Py_BEGIN_ALLOW_THREADS
 	s = mysql_stat(&(self->connection));
 	Py_END_ALLOW_THREADS
@@ -1156,7 +1045,6 @@ _mysql_ConnectionObject_store_result(
 	MYSQL_RES *result;
 
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_connection(self);
 	Py_BEGIN_ALLOW_THREADS
         result = mysql_store_result(&(self->connection));
 	Py_END_ALLOW_THREADS
@@ -1175,7 +1063,6 @@ _mysql_ConnectionObject_thread_id(
 {
 	unsigned long pid;
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_connection(self);
 	Py_BEGIN_ALLOW_THREADS
 	pid = mysql_thread_id(&(self->connection));
 	Py_END_ALLOW_THREADS
@@ -1190,7 +1077,6 @@ _mysql_ConnectionObject_use_result(
 	MYSQL_RES *result;
 
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_connection(self);
 	Py_BEGIN_ALLOW_THREADS
         result = mysql_use_result(&(self->connection));
 	Py_END_ALLOW_THREADS
@@ -1206,11 +1092,10 @@ static void
 _mysql_ConnectionObject_dealloc(
 	_mysql_ConnectionObject *self)
 {
-	PyObject *o;
-
 	if (self->open) {
-		o = _mysql_ConnectionObject_close(self, NULL);
-		Py_XDECREF(o);
+		Py_BEGIN_ALLOW_THREADS
+		mysql_close(&(self->connection));
+		Py_END_ALLOW_THREADS
 	}
 	Py_XDECREF(self->converter);
 	PyMem_Free((char *) self);
@@ -1221,18 +1106,13 @@ _mysql_ConnectionObject_repr(
 	_mysql_ConnectionObject *self)
 {
 	char buf[300];
-	if (self->open)
-		sprintf(buf, "<open connection to '%.256s' at %lx>",
-			self->connection.host,
-			(long)self);
-	else
-		sprintf(buf, "<closed connection at %lx>",
-			(long)self);
+	sprintf(buf, "<%s connection to '%.256s' at %lx>",
+		self->open ? "open" : "closed",
+		self->connection.host,
+		(long)self);
 	return PyString_FromString(buf);
 }
 
-static char _mysql_ResultObject_data_seek__doc__[] =
-"data_seek(n) -- seek to row n of result set";
 static PyObject *
 _mysql_ResultObject_data_seek(
      _mysql_ResultObject *self,
@@ -1240,14 +1120,11 @@ _mysql_ResultObject_data_seek(
 {
 	unsigned int row;
 	if (!PyArg_ParseTuple(args, "i:data_seek", &row)) return NULL;
-	check_result_connection(self);
 	mysql_data_seek(self->result, row);
 	Py_INCREF(Py_None);
 	return Py_None;
 }
 
-static char _mysql_ResultObject_row_seek__doc__[] =
-"row_seek(n) -- seek by offset n rows of result set";
 static PyObject *
 _mysql_ResultObject_row_seek(
      _mysql_ResultObject *self,
@@ -1256,15 +1133,12 @@ _mysql_ResultObject_row_seek(
 	int offset;
         MYSQL_ROW_OFFSET r;
 	if (!PyArg_ParseTuple(args, "i:row_seek", &offset)) return NULL;
-	check_result_connection(self);
 	r = mysql_row_tell(self->result);
 	mysql_row_seek(self->result, r+offset);
 	Py_INCREF(Py_None);
 	return Py_None;
 }
 
-static char _mysql_ResultObject_row_tell__doc__[] =
-"row_tell() -- return the current row number of the result set.";
 static PyObject *
 _mysql_ResultObject_row_tell(
 	_mysql_ResultObject *self,
@@ -1272,7 +1146,6 @@ _mysql_ResultObject_row_tell(
 {
 	MYSQL_ROW_OFFSET r;
 	if (!PyArg_NoArgs(args)) return NULL;
-	check_result_connection(self);
 	r = mysql_row_tell(self->result);
 	return PyInt_FromLong(r-self->result->data->data);
 }
@@ -1306,6 +1179,7 @@ static PyMethodDef _mysql_ConnectionObject_methods[] = {
 	{"character_set_name", (PyCFunction)_mysql_ConnectionObject_character_set_name, 0},
 #endif
 	{"close",           (PyCFunction)_mysql_ConnectionObject_close, 0},
+	{"commit",          (PyCFunction)_mysql_ConnectionObject_commit, 0},
 	{"dump_debug_info", (PyCFunction)_mysql_ConnectionObject_dump_debug_info, 0},
 	{"escape_string",   (PyCFunction)_mysql_escape_string, 1},
 	{"error",           (PyCFunction)_mysql_ConnectionObject_error, 0},
@@ -1341,12 +1215,9 @@ static struct memberlist _mysql_ConnectionObject_memberlist[] = {
 };
 
 static PyMethodDef _mysql_ResultObject_methods[] = {
-	{"data_seek",       (PyCFunction)_mysql_ResultObject_data_seek,
-	                    METH_VARARGS, _mysql_ResultObject_data_seek__doc__},
-	{"row_seek",        (PyCFunction)_mysql_ResultObject_row_seek,
-	                    METH_VARARGS, _mysql_ResultObject_row_seek__doc__},
-	{"row_tell",        (PyCFunction)_mysql_ResultObject_row_tell,
-	                    METH_VARARGS, _mysql_ResultObject_row_tell__doc__},
+	{"data_seek",       (PyCFunction)_mysql_ResultObject_data_seek, 1},
+	{"row_seek",        (PyCFunction)_mysql_ResultObject_row_seek, 1},
+	{"row_tell",        (PyCFunction)_mysql_ResultObject_row_tell, 0},
 	{"describe",        (PyCFunction)_mysql_ResultObject_describe, 0},
 	{"fetch_row",       (PyCFunction)_mysql_ResultObject_fetch_row, METH_VARARGS | METH_KEYWORDS},
 	{"field_flags",     (PyCFunction)_mysql_ResultObject_field_flags, 0},
@@ -1375,10 +1246,8 @@ _mysql_ConnectionObject_getattr(
 		return PyInt_FromLong((long)(self->open));
 	if (strcmp(name, "closed") == 0)
 		return PyInt_FromLong((long)!(self->open));
-	if (strcmp(name, "server_capabilities") == 0) {
-		check_connection(self);
+	if (strcmp(name, "server_capabilities") == 0)
 		return PyInt_FromLong((long)(self->connection.server_capabilities));
-	}
 	return PyMember_Get((char *)self, _mysql_ConnectionObject_memberlist, name);
 }
 
@@ -1462,61 +1331,31 @@ PyTypeObject _mysql_ResultObject_Type = {
 
 static PyMethodDef
 _mysql_methods[] = {
-	{ "connect",
-	  (PyCFunction)_mysql_connect,
-	  METH_VARARGS | METH_KEYWORDS,
-	  _mysql_connect__doc__
-	},
-        { "debug",
-	  (PyCFunction)_mysql_debug, 
-	  METH_VARARGS,
-	  _mysql_debug__doc__
-	},
-	{ "escape", 
-	  (PyCFunction)_mysql_escape, 
-	  METH_VARARGS,
-	  _mysql_escape__doc__
-	},
-	{ "escape_sequence",
-	  (PyCFunction)_mysql_escape_sequence,
-	  METH_VARARGS,
-	  _mysql_escape_sequence__doc__
-	},
-	{ "escape_dict",
-	  (PyCFunction)_mysql_escape_dict,
-	  METH_VARARGS,
-	  _mysql_escape_dict__doc__
-	},
-	{ "escape_string",
-	  (PyCFunction)_mysql_escape_string,
-	  METH_VARARGS,
-	  _mysql_escape_string__doc__
-	},
-	{ "string_literal",
-	  (PyCFunction)_mysql_string_literal,
-	  METH_VARARGS,
-	  _mysql_string_literal__doc__
-	},
-	{ "get_client_info",
-	  (PyCFunction)_mysql_get_client_info,
-	  0,
-	  _mysql_get_client_info__doc__
-	},
+	{ "connect", (PyCFunction)_mysql_connect, METH_VARARGS | METH_KEYWORDS },
+        { "debug", (PyCFunction)_mysql_debug, METH_VARARGS },
+	{ "escape", (PyCFunction)_mysql_escape, METH_VARARGS },
+	{ "escape_sequence", (PyCFunction)_mysql_escape_sequence, METH_VARARGS },
+	{ "escape_dict", (PyCFunction)_mysql_escape_dict, METH_VARARGS },
+	{ "escape_string", (PyCFunction)_mysql_escape_string, METH_VARARGS },
+	{ "string_literal", (PyCFunction)_mysql_string_literal, METH_VARARGS },
+	{ "get_client_info", (PyCFunction)_mysql_get_client_info },
 	{NULL, NULL} /* sentinel */
 };
 
 static PyObject *
 _mysql_NewException(
 	PyObject *dict,
-	PyObject *edict,
-	char *name)
+	char *name,
+	PyObject *base)
 {
-	PyObject *e;
+	PyObject *v;
+	char longname[256];
 
-	if (!(e = PyDict_GetItemString(edict, name)))
+	sprintf(longname, "_mysql.%s", name);
+	if ((v = PyErr_NewException(longname, base, NULL)) == NULL)
 		return NULL;
-	if (PyDict_SetItemString(dict, name, e)) return NULL;
-	return e;
+	if (PyDict_SetItemString(dict, name, v)) return NULL;
+	return v;
 }
 
 int
@@ -1548,60 +1387,76 @@ return result objects (MYSQL_RES). Functions which expect MYSQL_RES * as\n\
 an argument are now methods of the result object. The mysql_real_*\n\
 functions are the ones used in place of not-real ones. The various\n\
 FLAG_*, CLIENT_*, FIELD_TYPE_*, etc. constants are renamed to FLAG.*,\n\
-CLIENT.*, FIELD_TYPE.*, etc. Deprecated functions (as of 3.22) are NOT\n\
-implemented.\n\
-";
+CLIENT.*, FIELD_TYPE.*, etc. Deprecated functions are NOT implemented.\n\
+\n\
+type_conv is a dictionary which maps FIELD_TYPE.* to Python functions\n\
+which convert a string to some value. This is used by the fetch_row method.\n\
+Types not mapped are returned as strings. Numbers are all converted\n\
+reasonably, except DECIMAL.\n\
+\n\
+result.describe() produces a DB API description of the rows.\n\
+\n\
+escape_sequence() accepts a sequence of items and a type conversion dictionary.\n\
+Using the type of the item, it gets a converter function from the dictionary\n\
+(uses the string type if the item type is not found) and applies this to the\n\
+item. the result should be converted to strings with all the necessary\n\
+quoting.\n\
+\n\
+mysql_escape_string() on them, and returns them as a tuple.\n\
+\n\
+result.field_flags() returns the field flags for the result.\n\
+\n\
+result.fetch_row([n=0[, how=1]]) fetches up to n rows (default: n=1)\n\
+as a tuple of tuples (default: how=0) or dictionaries (how=1).\n\
+MySQL returns strings, but fetch_row() does data conversion\n\
+according to type_conv.\n\
+\n\
+For everything else, check the MySQL docs." ;
 
 DL_EXPORT(void)
 init_mysql(void)
 {
-	PyObject *dict, *module, *emod, *edict;
+	PyObject *dict, *module;
 	module = Py_InitModule3("_mysql", _mysql_methods, _mysql___doc__);
 #ifdef MS_WIN32
 	_mysql_ConnectionObject_Type.ob_type = &PyType_Type;
 	_mysql_ResultObject_Type.ob_type = &PyType_Type;
 #endif
-	if (!(dict = PyModule_GetDict(module))) goto error;
-	if (PyDict_SetItemString(dict, "__version__",
-			       PyString_FromString(_mysql__version__)))
-		goto error;
-	if (!(emod = PyImport_ImportModule("_mysql_const.exc")))
-		goto error;
-	if (!(edict = PyModule_GetDict(emod))) goto error;
-	if (!(_mysql_MySQLError =
-	      _mysql_NewException(dict, edict, "MySQLError")))
-		goto error;
+	dict = PyModule_GetDict(module);
 	if (!(_mysql_Warning =
-	      _mysql_NewException(dict, edict, "Warning")))
+	      _mysql_NewException(dict, "Warning", PyExc_StandardError)))
 		goto error;
 	if (!(_mysql_Error =
-	      _mysql_NewException(dict, edict, "Error")))
+	      _mysql_NewException(dict, "Error", PyExc_StandardError)))
 		goto error;
 	if (!(_mysql_InterfaceError =
-	      _mysql_NewException(dict, edict, "InterfaceError")))
+	      _mysql_NewException(dict, "InterfaceError", _mysql_Error)))
 		goto error;
 	if (!(_mysql_DatabaseError =
-	      _mysql_NewException(dict, edict, "DatabaseError")))
+	      _mysql_NewException(dict, "DatabaseError", _mysql_Error)))
 		goto error;
 	if (!(_mysql_DataError =
-	      _mysql_NewException(dict, edict, "DataError")))
+	      _mysql_NewException(dict, "DataError", _mysql_DatabaseError)))
 		goto error;
 	if (!(_mysql_OperationalError =
-	      _mysql_NewException(dict, edict, "OperationalError")))
+	      _mysql_NewException(dict, "OperationalError",
+				  _mysql_DatabaseError)))
 		goto error;
 	if (!(_mysql_IntegrityError =
-	      _mysql_NewException(dict, edict, "IntegrityError")))
+	      _mysql_NewException(dict, "IntegrityError",
+				  _mysql_DatabaseError)))
 		goto error;
 	if (!(_mysql_InternalError =
-	      _mysql_NewException(dict, edict, "InternalError")))
+	      _mysql_NewException(dict, "InternalError",
+				  _mysql_DatabaseError)))
+		goto error;
 	if (!(_mysql_ProgrammingError =
-	      _mysql_NewException(dict, edict, "ProgrammingError")))
+	      _mysql_NewException(dict, "ProgrammingError",
+				  _mysql_DatabaseError)))
 		goto error;
 	if (!(_mysql_NotSupportedError =
-	      _mysql_NewException(dict, edict, "NotSupportedError")))
-		goto error;
-	Py_DECREF(emod);
-	if (_mysql_Constant_class(dict, "_mysql_const.exc", "exc"))
+	      _mysql_NewException(dict, "NotSupportedError",
+				  _mysql_DatabaseError)))
 		goto error;
 	if (_mysql_Constant_class(dict, "_mysql_const.FLAG", "FLAG"))
 		goto error;
