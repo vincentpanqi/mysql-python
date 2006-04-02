@@ -30,65 +30,50 @@ import sys
 from distutils.core import setup
 from distutils.extension import Extension
 
-mysqlclient = os.getenv('mysqlclient', 'mysqlclient_r')
-mysqlstatic = eval(os.getenv('mysqlstatic', 'False'))
+mysqlclient = os.getenv('mysqlclient', 'mysqlclient')
+mysqloptlibs = os.getenv('mysqloptlibs', '').split()
 embedded_server = (mysqlclient == 'mysqld')
 
 name = "MySQL-%s" % os.path.basename(sys.executable)
 if embedded_server:
     name = name + "-embedded"
-version = "1.2.0"
+version = "1.1.9"
 
-extra_objects = []
+def config(what):
+    if sys.platform == "win32":
+        try:
+            from win32pipe import popen
+        except ImportError:
+            print "win32pipe is required for building on Windows."
+            print "Get it here: http://www.python.org/windows/win32/"
+            raise
+    else:
+        from os import popen
+    return popen("mysql_config --%s" % what).read().strip().split()
+
+include_dirs = [ i[2:] for i in config('include') ]
+
+if mysqlclient == "mysqlclient":
+    libs = config("libs")
+elif mysqlclient == "mysqlclient_r":
+    libs = config("libs_r")
+elif mysqlclient == "mysqld":
+    libs = config("embedded")
+library_dirs = [ i[2:] for i in libs if i[:2] == "-L" ]
+libraries = [ i[2:] for i in libs if i[:2] == "-l" ]
+
+# For reasons I do not understand, mysql_client --libs includes -lz
+# but --libs_r does *not*. This has to be a bug...
+# http://bugs.mysql.com/bug.php?id=6273
 
 if sys.platform == "win32":
-    mysqlroot = os.getenv('mysqlroot', None)
-    if mysqlroot is None:
-        print "You need to set the environment variable mysqlroot!"
-        print "This should be the path to your MySQL installation."
-        print "Probably C:\Program Files\MySQL 4.1\ or something like that."
-        sys.exit(1)
-
-    include_dirs = [os.path.join(mysqlroot, "include")]
-    library_dirs = [os.path.join(mysqlroot, "libs")]
-    libraries = ['zlib', 'msvcrt', 'libcmt', 'wsock32', 'advapi32']
-    if mysqlstatic:
-        extra_objects.append(os.path.join(
-            library_dirs[0], mysqlclient+'.lib'))
-    else:
-        libraries.append(mysqlclient)
-
+    if "zlib" not in libraries:
+        libraries.append("zlib")
 else:
-    
-    def config(what):
-        from os import popen
-        f = popen("mysql_config --%s" % what)
-        data = f.read().strip().split()
-        if f.close(): data = []
-        return data
-
-    include_dirs = [ i[2:] for i in config('include') if i.startswith('-i') ]
-
-    if mysqlclient == "mysqlclient":
-        libs = config("libs")
-    elif mysqlclient == "mysqlclient_r":
-        libs = config("libs_r")
-    elif mysqlclient == "mysqld":
-        libs = config("embedded")
-    library_dirs = [ i[2:] for i in libs if i.startswith("-L") ]
-    libraries = [ i[2:] for i in libs if i.startswith("-l") ]
-
-    # Workaround for a pre-4.1.9 bug
     if "z" not in libraries:
         libraries.append("z")
 
-    extra_compile_args = config("cflags")
-
-    if mysqlstatic:
-        extra_objects.append(os.path.join(
-            library_dirs[0],'lib%s.a' % mysqlclient))
-    else:
-        libraries.append(mysqlclient)
+extra_compile_args = config("cflags")
 
 # avoid frightening noobs with warnings about missing directories
 include_dirs = [ d for d in include_dirs if os.path.isdir(d) ]
@@ -148,7 +133,6 @@ metadata = {
             library_dirs=library_dirs,
             libraries=libraries,
             extra_compile_args=extra_compile_args,
-            extra_objects=extra_objects,
             ),
         ],
     }

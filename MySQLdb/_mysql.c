@@ -1,5 +1,5 @@
-#define version_info "(1,2,0,'final',1)"
-#define __version__ "1.2.0"
+#define version_info "(1,1,9,'final',1)"
+#define __version__ "1.1.9"
 /*
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -440,10 +440,9 @@ _mysql_ConnectionObject_Initialize(
 				  "named_pipe", "init_command",
 				  "read_default_file", "read_default_group",
 				  "client_flag", "ssl",
-				  "local_infile",
 				  NULL } ;
 	int connect_timeout = 0;
-	int compress = -1, named_pipe = -1, local_infile = -1;
+	int compress = -1, named_pipe = -1;
 	char *init_command=NULL,
 	     *read_default_file=NULL,
 	     *read_default_group=NULL;
@@ -451,7 +450,7 @@ _mysql_ConnectionObject_Initialize(
 	self->converter = NULL;
 	self->open = 0;
 	check_server_init(-1);
-	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|ssssisOiiisssiOi:connect",
+	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|ssssisOiiisssiO:connect",
 					 kwlist,
 					 &host, &user, &passwd, &db,
 					 &port, &unix_socket, &conv,
@@ -459,9 +458,7 @@ _mysql_ConnectionObject_Initialize(
 					 &compress, &named_pipe,
 					 &init_command, &read_default_file,
 					 &read_default_group,
-					 &client_flag, &ssl,
-					 &local_infile
-					 ))
+					 &client_flag, &ssl))
 		return -1;
 
 	if (!conv) 
@@ -512,9 +509,6 @@ _mysql_ConnectionObject_Initialize(
 		mysql_options(&(self->connection), MYSQL_READ_DEFAULT_FILE, read_default_file);
 	if (read_default_group != NULL)
 		mysql_options(&(self->connection), MYSQL_READ_DEFAULT_GROUP, read_default_group);
-
-	if (local_infile != -1)
-		mysql_options(&(self->connection), MYSQL_OPT_LOCAL_INFILE, (char *) &local_infile);
 
 #if HAVE_OPENSSL
 	if (ssl)
@@ -586,13 +580,6 @@ read_default_file\n\
 \n\
 read_default_group\n\
   see the MySQL documentation for mysql_options()\n\
-\n\
-client_flag\n\
-  client flags from MySQLdb.constants.CLIENT\n\
-\n\
-load_infile\n\
-  int, non-zero enables LOAD LOCAL INFILE, zero disables\n\
-\n\
 ";
 
 static PyObject *
@@ -640,9 +627,8 @@ _mysql_ConnectionObject_close(
 	_mysql_ConnectionObject *self,
 	PyObject *args)
 {
-	if (args) {
-		if (!PyArg_ParseTuple(args, "")) return NULL;
-	}
+	if (!args) return NULL;
+	if (!PyArg_ParseTuple(args, "")) return NULL;
 	if (self->open) {
 		Py_BEGIN_ALLOW_THREADS
 		mysql_close(&(self->connection));

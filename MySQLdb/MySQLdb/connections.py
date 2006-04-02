@@ -106,9 +106,6 @@ class Connection(_mysql.connection):
           (mysql_ssl_set()).  If this is set, and the client does not
           support SSL, UnsupportedError will be raised.
 
-        local_infile
-          integer, non-zero enables LOAD LOCAL INFILE; zero disables
-    
         There are a number of undocumented, non-standard methods. See the
         documentation for the MySQL C API for some hints on what they do.
 
@@ -116,7 +113,6 @@ class Connection(_mysql.connection):
         from constants import CLIENT, FIELD_TYPE
         from converters import conversions
         import types
-        from weakref import proxy
         kwargs2 = kwargs.copy()
         if kwargs.has_key('conv'):
             kwargs2['conv'] = conv = kwargs['conv']
@@ -136,20 +132,12 @@ class Connection(_mysql.connection):
         self.charset = self.character_set_name().split('_')[0]
 
         if use_unicode:
-            def u(s, self=proxy(self)):
-                return s.decode(self.charset)
-            conv[FIELD_TYPE.STRING] = u
-            conv[FIELD_TYPE.VAR_STRING] = u
-            conv[FIELD_TYPE.BLOB].insert(-1, (None, u))
-
-        def string_literal(obj, dummy=None, self=proxy(self)):
-            return self.string_literal(obj)
-        
-        def unicode_literal(u, dummy=None, self=proxy(self)):
-            return self.literal(u.encode(self.charset))
-         
-        self.converter[types.StringType] = string_literal
-        self.converter[types.UnicodeType] = unicode_literal
+            conv[FIELD_TYPE.STRING] = unicode
+            conv[FIELD_TYPE.VAR_STRING] = unicode
+            conv[FIELD_TYPE.BLOB].insert(-1, (None, unicode))
+            
+        self.converter[types.StringType] = self.string_literal
+        self.converter[types.UnicodeType] = self.unicode_literal
         self._transactional = self.server_capabilities & CLIENT.TRANSACTIONS
         if self._transactional:
             # PEP-249 requires autocommit to be initially off
@@ -174,11 +162,22 @@ class Connection(_mysql.connection):
         If o is a non-string sequence, the items of the sequence are
         converted and returned as a sequence.
 
-        Non-standard. For internal use; do not use this in your
-        applications.
+        Non-standard.
 
         """
         return self.escape(o, self.converter)
+
+    def unicode_literal(self, u, dummy=None):
+        """
+
+        Convert a unicode object u to a string using the current
+        character set as the encoding. If that's not available,
+        latin1 is used.
+
+        Non-standard.
+
+        """
+        return self.literal(u.encode(self.charset))
 
     if not hasattr(_mysql.connection, 'warning_count'):
 
