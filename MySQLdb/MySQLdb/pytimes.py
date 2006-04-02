@@ -8,11 +8,10 @@ from datetime import date, datetime, time, timedelta
 
 Date = date
 Time = time
-TimeDelta = timedelta
 Timestamp = datetime
 
-DateTimeDeltaType = timedelta
-DateTimeType = datetime
+DateTimeDeltaType = type(timedelta)
+DateTimeType = type(datetime)
 
 def DateFromTicks(ticks):
     """Convert UNIX ticks into a date instance."""
@@ -38,20 +37,20 @@ def DateTime_or_None(s):
     elif 'T' in s:
         sep = 'T'
     else:
-        return Date_or_None(s)
+        return None
 
     try:
         d, t = s.split(sep, 1)
         return datetime(*[ int(x) for x in d.split('-')+t.split(':') ])
     except:
-        return Date_or_None(s)
+        return None
 
 def TimeDelta_or_None(s):
     from math import modf
     try:
         h, m, s = s.split(':')
         td = timedelta(hours=int(h), minutes=int(m), seconds=int(s),
-                       microseconds=int(modf(float(s))[0])*1000000)
+                       microseconds=int(modf(float(s)[0]))*1000000)
         if h < 0:
             return -td
         else:
