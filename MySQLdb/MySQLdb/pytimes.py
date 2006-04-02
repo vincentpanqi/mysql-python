@@ -8,7 +8,6 @@ from datetime import date, datetime, time, timedelta
 
 Date = date
 Time = time
-TimeDelta = timedelta
 Timestamp = datetime
 
 DateTimeDeltaType = timedelta
