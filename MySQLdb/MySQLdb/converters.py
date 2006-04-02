@@ -6,25 +6,18 @@ dictionary conversions maps some kind of type to a conversion function
 which returns the corresponding value:
 
 Key: FIELD_TYPE.* (from MySQLdb.constants)
-
 Conversion function:
-
-    Arguments: string
-
-    Returns: Python object
+     Arguments: string
+     Returns: Python object
 
 Key: Python type object (from types) or class
-
 Conversion function:
-
-    Arguments: Python object of indicated type or class AND 
-               conversion dictionary
-
-    Returns: SQL literal value
-
-    Notes: Most conversion functions can ignore the dictionary, but
-           it is a required parameter. It is necessary for converting
-           things like sequences and instances.
+     Arguments: Python object of indicated type or class AND 
+                conversion dictionary
+     Returns: SQL literal value
+     Notes: Most conversion functions can ignore the dictionary, but
+            it is a required parameter. It is necessary for converting
+            things like sequences and instances.
 
 Don't modify conversions if you can avoid it. Instead, make copies
 (with the copy() method), modify the copies, and then pass them to
@@ -33,31 +26,33 @@ MySQL.connect().
 """
 
 from _mysql import string_literal, escape_sequence, escape_dict, escape, NULL
-from constants import FIELD_TYPE, FLAG
+from constants import FIELD_TYPE
 from sets import *
 from times import *
+from string import split
 import types
 import array
 
 
 def Str2Set(s):
-    values = s.split(',')
-    return Set(*values)
+    values = split(s, ',')
+    return apply(Set, tuple(values))
 
 def Thing2Str(s, d):
     """Convert something into a string via str()."""
     return str(s)
 
 def Unicode2Str(s, d):
-    """Convert a unicode object to a string using the default encoding.
-    This is only used as a placeholder for the real function, which
-    is connection-dependent."""
-    return s.encode()
+    """Convert a unicode object to a string using latin1 encoding."""
+    return s.encode('latin')
 
-Long2Int = Thing2Str
-
-def Float2Str(o, d):
-    return '%.15g' % o
+# Python 1.5.2 compatibility hack
+if str(0L)[-1]=='L':
+    def Long2Int(l, d):
+        """Convert a long integer to a string, chopping the L."""
+        return str(l)[:-1]
+else:
+    Long2Int = Thing2Str
 
 def None2NULL(o, d):
     """Convert None to NULL."""
@@ -93,9 +88,7 @@ def Instance2Str(o, d):
     if not cl and hasattr(types, 'ObjectType'):
         cl = filter(lambda x,o=o:
                     type(x) is types.TypeType
-                    and isinstance(o, x)
-                    and d[x] is not Instance2Str,
-                    d.keys())
+                    and isinstance(o, x), d.keys())
     if not cl:
         return d[types.StringType](o,d)
     d[o.__class__] = d[cl[0]]
@@ -110,7 +103,7 @@ def array2Str(o, d):
 conversions = {
     types.IntType: Thing2Str,
     types.LongType: Long2Int,
-    types.FloatType: Float2Str,
+    types.FloatType: Thing2Str,
     types.NoneType: None2NULL,
     types.TupleType: escape_sequence,
     types.ListType: escape_sequence,
@@ -118,8 +111,6 @@ conversions = {
     types.InstanceType: Instance2Str,
     array.ArrayType: array2Str,
     types.StringType: Thing2Literal, # default
-    types.UnicodeType: Unicode2Str,
-    types.ObjectType: Instance2Str,
     DateTimeType: DateTime2literal,
     DateTimeDeltaType: DateTimeDelta2literal,
     FIELD_TYPE.TINY: int,
@@ -136,21 +127,15 @@ conversions = {
     FIELD_TYPE.DATETIME: DateTime_or_None,
     FIELD_TYPE.TIME: TimeDelta_or_None,
     FIELD_TYPE.DATE: Date_or_None,
-    FIELD_TYPE.BLOB: [
-        (FLAG.BINARY, char_array),
-        (None, None),
-    ],
+    FIELD_TYPE.BLOB: char_array,
+    FIELD_TYPE.LONG_BLOB: char_array,
+    FIELD_TYPE.MEDIUM_BLOB: char_array,
+    FIELD_TYPE.TINY_BLOB: char_array,
     }
 
-try:
-    from decimal import Decimal
-    conversions[FIELD_TYPE.DECIMAL] = Decimal
-except ImportError:
-    pass
 
-try:
-    from types import BooleanType
-    def Bool2Str(s, d): return str(int(s))
-    conversions[BooleanType] = Bool2Str
-except ImportError:
-    pass
+if hasattr(types, 'UnicodeType'):
+    conversions[types.UnicodeType] = Unicode2Str
+
+if hasattr(types, 'ObjectType'):
+    conversions[types.ObjectType] = Instance2Str
