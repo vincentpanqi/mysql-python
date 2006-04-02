@@ -116,10 +116,10 @@ class Connection(_mysql.connection):
         from constants import CLIENT, FIELD_TYPE
         from converters import conversions
         import types
-        from weakref import proxy
+
         kwargs2 = kwargs.copy()
         if kwargs.has_key('conv'):
-            kwargs2['conv'] = conv = kwargs['conv']
+            kwargs2['conv'] = conv = kwargs['conv'].copy()
         else:
             kwargs2['conv'] = conv = conversions.copy()
         if kwargs.has_key('cursorclass'):
@@ -130,22 +130,32 @@ class Connection(_mysql.connection):
         use_unicode = kwargs.get('use_unicode', 0)
         if kwargs.has_key('use_unicode'):
             del kwargs2['use_unicode']
-                
+
+        client_flag = kwargs.get('client_flag', 0)
+        client_version = tuple([ int(n) for n in _mysql.get_client_info().split('.')[:2] ])
+        if client_version >= (4, 1):
+            client_flag |= CLIENT.MULTI_STATEMENTS
+        if client_version >= (5, 0):
+            client_flag |= CLIENT.MULTI_RESULTS
+            
+        kwargs2['client_flag'] = client_flag
+
         super(Connection, self).__init__(*args, **kwargs2)
 
+        self._server_version = tuple([ int(n) for n in self.get_server_info().split('.')[:2] ])
         self.charset = self.character_set_name().split('_')[0]
 
         if use_unicode:
-            def u(s, self=proxy(self)):
+            def u(s):
                 return s.decode(self.charset)
-            conv[FIELD_TYPE.STRING] = u
-            conv[FIELD_TYPE.VAR_STRING] = u
+            conv[FIELD_TYPE.STRING].insert(-1, (None, u))
+            conv[FIELD_TYPE.VAR_STRING].insert(-1, (None, u))
             conv[FIELD_TYPE.BLOB].insert(-1, (None, u))
 
-        def string_literal(obj, dummy=None, self=proxy(self)):
+        def string_literal(obj, dummy=None):
             return self.string_literal(obj)
         
-        def unicode_literal(u, dummy=None, self=proxy(self)):
+        def unicode_literal(u, dummy=None):
             return self.literal(u.encode(self.charset))
          
         self.converter[types.StringType] = string_literal
@@ -180,6 +190,15 @@ class Connection(_mysql.connection):
         """
         return self.escape(o, self.converter)
 
+    def begin(self):
+        """Explicitly begin a connection. Non-standard.
+        DEPRECATED: Will be removed in 1.3.
+        Use an SQL BEGIN statement instead."""
+        from warnings import warn
+        warn("begin() is non-standard and will be removed in 1.3",
+             DeprecationWarning, 2)
+        self.query("BEGIN")
+        
     if not hasattr(_mysql.connection, 'warning_count'):
 
         def warning_count(self):
@@ -191,7 +210,19 @@ class Connection(_mysql.connection):
                 return atoi(info.split()[-1])
             else:
                 return 0
-            
+
+    def show_warnings(self):
+        """Return detailed information about warnings as a
+        sequence of tuples of (Level, Code, Message). This
+        is only supported in MySQL-4.1 and up. If your server
+        is an earlier version, an empty sequence is returned."""
+        if self._server_version < (4,1): return ()
+        self.query("SHOW WARNINGS")
+        r = self.store_result()
+        warnings = r.fetch_row(0)
+        return [ (level.tostring(), int(code), message.tostring())
+                 for level, code, message in warnings ]
+    
     Warning = Warning
     Error = Error
     InterfaceError = InterfaceError

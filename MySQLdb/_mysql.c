@@ -1,5 +1,3 @@
-#define version_info "(1,2,0,'final',1)"
-#define __version__ "1.2.0"
 /*
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -39,6 +37,7 @@ PERFORMANCE OF THIS SOFTWARE.
 
 #include "structmember.h"
 #include "mysql.h"
+#include "my_config.h"
 #include "mysqld_error.h"
 #include "errmsg.h"
 
@@ -148,13 +147,31 @@ _mysql_Exception(_mysql_ConnectionObject *c)
 #ifdef ER_PRIMARY_CANT_HAVE_NULL
 	case ER_PRIMARY_CANT_HAVE_NULL:
 #endif
+#ifdef ER_NO_REFERENCED_ROW
+	case ER_NO_REFERENCED_ROW:
+#endif
+#ifdef ER_ROW_IS_REFERENCED
+	case ER_ROW_IS_REFERENCED:
+#endif
+#ifdef ER_CANNOT_ADD_FOREIGN
+	case ER_CANNOT_ADD_FOREIGN:
+#endif
 		e = _mysql_IntegrityError;
 		break;
 #ifdef ER_WARNING_NOT_COMPLETE_ROLLBACK
 	case ER_WARNING_NOT_COMPLETE_ROLLBACK:
+#endif
+#ifdef ER_NOT_SUPPORTED_YET
+	case ER_NOT_SUPPORTED_YET:
+#endif
+#ifdef ER_FEATURE_DISABLED
+	case ER_FEATURE_DISABLED:
+#endif
+#ifdef ER_UNKNOWN_STORAGE_ENGINE
+	case ER_UNKNOWN_STORAGE_ENGINE:
+#endif
 		e = _mysql_NotSupportedError;
 		break;
-#endif
 	default:
 		if (merr < 1000)
 			e = _mysql_InternalError;
@@ -1931,6 +1948,11 @@ _mysql_ResultObject_row_seek(
         MYSQL_ROW_OFFSET r;
 	if (!PyArg_ParseTuple(args, "i:row_seek", &offset)) return NULL;
 	check_result_connection(self);
+	if (self->use) {
+		PyErr_SetString(_mysql_ProgrammingError,
+				"cannot be used with connection.use_result()");
+		return NULL;
+	}
 	r = mysql_row_tell(self->result);
 	mysql_row_seek(self->result, r+offset);
 	Py_INCREF(Py_None);
@@ -1947,6 +1969,11 @@ _mysql_ResultObject_row_tell(
 	MYSQL_ROW_OFFSET r;
 	if (!PyArg_ParseTuple(args, "")) return NULL;
 	check_result_connection(self);
+	if (self->use) {
+		PyErr_SetString(_mysql_ProgrammingError,
+				"cannot be used with connection.use_result()");
+		return NULL;
+	}
 	r = mysql_row_tell(self->result);
 	return PyInt_FromLong(r-self->result->data->data);
 }

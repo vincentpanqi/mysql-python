@@ -34,16 +34,19 @@ MySQL.connect().
 
 from _mysql import string_literal, escape_sequence, escape_dict, escape, NULL
 from constants import FIELD_TYPE, FLAG
-from sets import *
+from sets import BaseSet, Set
 from times import *
 import types
 import array
 
+def Bool2Str(s, d): return str(int(s))
 
 def Str2Set(s):
-    values = s.split(',')
-    return Set(*values)
+    return Set(s.split(','))
 
+def Set2Str(s, d):
+    return string_literal(','.join(s), d)
+    
 def Thing2Str(s, d):
     """Convert something into a string via str()."""
     return str(s)
@@ -120,14 +123,17 @@ conversions = {
     types.StringType: Thing2Literal, # default
     types.UnicodeType: Unicode2Str,
     types.ObjectType: Instance2Str,
+    types.BooleanType: Bool2Str,
     DateTimeType: DateTime2literal,
     DateTimeDeltaType: DateTimeDelta2literal,
+    Set: Set2Str,
     FIELD_TYPE.TINY: int,
     FIELD_TYPE.SHORT: int,
     FIELD_TYPE.LONG: long,
     FIELD_TYPE.FLOAT: float,
     FIELD_TYPE.DOUBLE: float,
     FIELD_TYPE.DECIMAL: float,
+    FIELD_TYPE.NEWDECIMAL: float,
     FIELD_TYPE.LONGLONG: long,
     FIELD_TYPE.INT24: int,
     FIELD_TYPE.YEAR: int,
@@ -140,17 +146,22 @@ conversions = {
         (FLAG.BINARY, char_array),
         (None, None),
     ],
+    FIELD_TYPE.STRING: [
+        (FLAG.BINARY, char_array),
+        (None, None),
+    ],
+    FIELD_TYPE.VAR_STRING: [
+        (FLAG.BINARY, char_array),
+        (None, None),
+    ],
     }
 
 try:
     from decimal import Decimal
     conversions[FIELD_TYPE.DECIMAL] = Decimal
+    conversions[FIELD_TYPE.NEWDECIMAL] = Decimal
 except ImportError:
     pass
 
-try:
-    from types import BooleanType
-    def Bool2Str(s, d): return str(int(s))
-    conversions[BooleanType] = Bool2Str
-except ImportError:
-    pass
+
+
