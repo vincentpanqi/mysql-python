@@ -1,156 +1,109 @@
 #!/usr/bin/env python
 
-"""\
-=========================
-Python interface to MySQL
-=========================
-
-MySQLdb is an interface to the popular MySQL_ database server for
-Python.  The design goals are:
-
-- Compliance with Python database API version 2.0 [PEP-0249]_
-
-- Thread-safety
-
-- Thread-friendliness (threads will not block each other) 
-
-MySQL-3.22 through 4.1 and Python-2.3 through 2.4 are currently
-supported.
-
-MySQLdb is `Free Software`_.
-
-.. _MySQL: http://www.mysql.com/
-.. _`Free Software`: http://www.gnu.org/
-.. [PEP-0249] http://www.python.org/peps/pep-0249.html
-
-"""
+class Abort(Exception): pass
 
 import os
 import sys
 from distutils.core import setup
 from distutils.extension import Extension
+from ConfigParser import SafeConfigParser
 
-mysqlclient = os.getenv('mysqlclient', 'mysqlclient_r')
-mysqlstatic = eval(os.getenv('mysqlstatic', 'False'))
-embedded_server = (mysqlclient == 'mysqld')
+if sys.version_info < (2, 3):
+    raise Abort, "Python-2.3 or newer is required"
 
-name = "MySQL-%s" % os.path.basename(sys.executable)
-if embedded_server:
-    name = name + "-embedded"
-version = "1.2.0"
+config = SafeConfigParser()
+config.read(['metadata.cfg', 'site.cfg'])
+
+metadata = dict(config.items('metadata'))
+options = dict(config.items('options'))
+
+metadata['py_modules'] = filter(None, metadata['py_modules'].split('\n'))
+metadata['classifiers'] = filter(None, metadata['classifiers'].split('\n'))
+
+def mysql_config(what):
+    from os import popen
+    f = popen("mysql_config --%s" % what)
+    data = f.read().strip().split()
+    if f.close(): data = []
+    return data
+
+# This dequote() business is required for some older versions
+# of mysql_config
+
+def dequote(s):
+    if s[0] in "\"'" and s[0] == s[-1]:
+        s = s[1:-1]
+    return s
+
+def enabled(option):
+    value = options[option]
+    s = value.lower()
+    if s in ('yes','true','1','y'):
+        return True
+    elif s in ('no', 'false', '0', 'n'):
+        return False
+    else:
+        raise Abort, "Unknown value %s for option %s" % (value, option)
 
 extra_objects = []
-
-if sys.platform == "win32":
-    mysqlroot = os.getenv('mysqlroot', None)
-    if mysqlroot is None:
-        print "You need to set the environment variable mysqlroot!"
-        print "This should be the path to your MySQL installation."
-        print "Probably C:\Program Files\MySQL 4.1\ or something like that."
-        sys.exit(1)
-
-    include_dirs = [os.path.join(mysqlroot, "include")]
-    library_dirs = [os.path.join(mysqlroot, "libs")]
-    libraries = ['zlib', 'msvcrt', 'libcmt', 'wsock32', 'advapi32']
-    if mysqlstatic:
-        extra_objects.append(os.path.join(
-            library_dirs[0], mysqlclient+'.lib'))
-    else:
-        libraries.append(mysqlclient)
-
+static = enabled('static')
+if enabled('embedded'):
+    libs = mysql_config("libmysqld-libs")
+    client = "mysqld"
+elif enabled('threadsafe'):
+    libs = mysql_config("libs_r")
+    client = "mysqlclient_r"
 else:
-    
-    def config(what):
-        from os import popen
-        f = popen("mysql_config --%s" % what)
-        data = f.read().strip().split()
-        if f.close(): data = []
-        return data
+    libs = mysql_config("libs")
+    client = "mysqlclient"
 
-    include_dirs = [ i[2:] for i in config('include') if i.startswith('-i') ]
+name = "MySQL-%s" % os.path.basename(sys.executable)
+if enabled('embedded'):
+    name = name + "-embedded"
+metadata['name'] = name
 
-    if mysqlclient == "mysqlclient":
-        libs = config("libs")
-    elif mysqlclient == "mysqlclient_r":
-        libs = config("libs_r")
-    elif mysqlclient == "mysqld":
-        libs = config("embedded")
-    library_dirs = [ i[2:] for i in libs if i.startswith("-L") ]
-    libraries = [ i[2:] for i in libs if i.startswith("-l") ]
+library_dirs = [ dequote(i[2:]) for i in libs if i.startswith("-L") ]
+libraries = [ dequote(i[2:]) for i in libs if i.startswith("-l") ]
 
-    # Workaround for a pre-4.1.9 bug
-    if "z" not in libraries:
-        libraries.append("z")
+removable_compile_args = '-I -L -l'.split()
+extra_compile_args = [ i for i in mysql_config("cflags")
+                       if i[:2] not in removable_compile_args ]
+include_dirs = [ dequote(i[2:])
+                 for i in mysql_config('include')
+                 if i.startswith('-I') ]
+if not include_dirs: # fix for MySQL-3.23
+    include_dirs = [ dequote(i[2:])
+		     for i in mysql_config('cflags')
+		     if i.startswith('-I') ]
 
-    extra_compile_args = config("cflags")
+if static:
+    extra_objects.append(os.path.join(
+        library_dirs[0],'lib%s.a' % client))
 
-    if mysqlstatic:
-        extra_objects.append(os.path.join(
-            library_dirs[0],'lib%s.a' % mysqlclient))
-    else:
-        libraries.append(mysqlclient)
+extra_compile_args.append("-Dversion_info=\"%s\"" % metadata['version_info'])
+extra_compile_args.append("-D__version__=\"%s\"" % metadata['version'])
 
-# avoid frightening noobs with warnings about missing directories
-include_dirs = [ d for d in include_dirs if os.path.isdir(d) ]
-library_dirs = [ d for d in library_dirs if os.path.isdir(d) ]
+rel = open("MySQLdb/release.py",'w')
+rel.write("""
+__author__ = "%(author)s <%(author_email)s>"
+version_info = %(version_info)s
+__version__ = "%(version)s"
+""" % metadata)
+rel.close()
 
-classifiers = """
-Development Status :: 5 - Production/Stable
-Environment :: Other Environment
-License :: OSI Approved :: GNU General Public License (GPL)
-Operating System :: MacOS :: MacOS X
-Operating System :: Microsoft :: Windows :: Windows NT/2000
-Operating System :: OS Independent
-Operating System :: POSIX
-Operating System :: POSIX :: Linux
-Operating System :: Unix
-Programming Language :: C
-Programming Language :: Python
-Topic :: Database
-Topic :: Database :: Database Engines/Servers
-"""
+del metadata['version_info']
 
-metadata = {
-    'name': name,
-    'version': version,
-    'description': "Python interface to MySQL",
-    'long_description': __doc__,
-    'author': "Andy Dustman",
-    'author_email': "andy@dustman.net",
-    'license': "GPL",
-    'platforms': "ALL",
-    'url': "http://sourceforge.net/projects/mysql-python",
-    'download_url': "http://prdownloads.sourceforge.net/mysql-python/" \
-                    "MySQL-python-%s.tar.gz" % version,
-    'classifiers': [ c for c in classifiers.split('\n') if c ],
-    'py_modules': [
-        "_mysql_exceptions",
-        "MySQLdb.converters",
-        "MySQLdb.connections",
-        "MySQLdb.cursors",
-        "MySQLdb.sets",
-        "MySQLdb.times",
-        "MySQLdb.stringtimes",
-        "MySQLdb.mxdatetimes",
-        "MySQLdb.pytimes",
-        "MySQLdb.constants.CR",
-        "MySQLdb.constants.FIELD_TYPE",
-        "MySQLdb.constants.ER",
-        "MySQLdb.constants.FLAG",
-        "MySQLdb.constants.REFRESH",
-        "MySQLdb.constants.CLIENT",
-        ],
-    'ext_modules': [
-        Extension(
-            name='_mysql',
-            sources=['_mysql.c'],
-            include_dirs=include_dirs,
-            library_dirs=library_dirs,
-            libraries=libraries,
-            extra_compile_args=extra_compile_args,
-            extra_objects=extra_objects,
-            ),
-        ],
-    }
-
+ext_mysql_metadata = dict(
+    name="_mysql",
+    include_dirs=include_dirs,
+    library_dirs=library_dirs,
+    libraries=libraries,
+    extra_compile_args=extra_compile_args,
+    extra_objects=extra_objects,
+    sources=['_mysql.c'],
+    )
+if config.read(['site.cfg']):
+    ext_mysql_metadata.update([ (k, v.split()) for k, v in config.items('compiler') ])
+ext_mysql = Extension(**ext_mysql_metadata)
+metadata['ext_modules'] = [ext_mysql]
 setup(**metadata)

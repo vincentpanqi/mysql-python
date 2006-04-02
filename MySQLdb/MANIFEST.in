@@ -1,5 +1,5 @@
 prune CVS
-recursive-include doc *.txt *.html *.css
+recursive-include doc *.txt
 include MANIFEST.in
 include MANIFEST
 include ChangeLog
@@ -7,3 +7,7 @@ include GPL
 include pymemcompat.h
 include dbapi20.py
 include test_MySQLdb_dbapi20.py
+include test_capabilities.py
+include test_MySQLdb_capabilities.py
+include metadata.cfg
+include site.cfg
