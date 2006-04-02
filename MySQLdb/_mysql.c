@@ -1,5 +1,5 @@
-#define version_info "(1,2,0,'final',1)"
-#define __version__ "1.2.0"
+#define version_info "(1,1,2,'final',1)"
+#define __version__ "1.1.2"
 /*
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -114,7 +114,6 @@ _mysql_Exception(_mysql_ConnectionObject *c)
 		Py_DECREF(t);
 		return NULL;
 	}
-	merr = mysql_errno(&(c->connection));
 	if (!merr)
 		e = _mysql_InterfaceError;
 	else if (merr > CR_MAX_ERROR) {
@@ -423,13 +422,12 @@ _mysql_ConnectionObject_Initialize(
 	PyObject *args,
 	PyObject *kwargs)
 {
-	MYSQL *conn = NULL;
+	MYSQL *conn=NULL;
 	PyObject *conv = NULL;
 	PyObject *ssl = NULL;
-#if HAVE_OPENSSL
+	PyObject *value = NULL;
 	char *key = NULL, *cert = NULL, *ca = NULL,
 		*capath = NULL, *cipher = NULL;
-#endif
 	char *host = NULL, *user = NULL, *passwd = NULL,
 		*db = NULL, *unix_socket = NULL;
 	uint port = MYSQL_PORT;
@@ -440,10 +438,9 @@ _mysql_ConnectionObject_Initialize(
 				  "named_pipe", "init_command",
 				  "read_default_file", "read_default_group",
 				  "client_flag", "ssl",
-				  "local_infile",
 				  NULL } ;
 	int connect_timeout = 0;
-	int compress = -1, named_pipe = -1, local_infile = -1;
+	int compress = -1, named_pipe = -1;
 	char *init_command=NULL,
 	     *read_default_file=NULL,
 	     *read_default_group=NULL;
@@ -451,7 +448,7 @@ _mysql_ConnectionObject_Initialize(
 	self->converter = NULL;
 	self->open = 0;
 	check_server_init(-1);
-	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|ssssisOiiisssiOi:connect",
+	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|ssssisOiiisssiO:connect",
 					 kwlist,
 					 &host, &user, &passwd, &db,
 					 &port, &unix_socket, &conv,
@@ -459,9 +456,7 @@ _mysql_ConnectionObject_Initialize(
 					 &compress, &named_pipe,
 					 &init_command, &read_default_file,
 					 &read_default_group,
-					 &client_flag, &ssl,
-					 &local_infile
-					 ))
+					 &client_flag, &ssl))
 		return -1;
 
 	if (!conv) 
@@ -479,18 +474,11 @@ _mysql_ConnectionObject_Initialize(
         PyErr_Clear();}
 	
 	if (ssl) {
-#if HAVE_OPENSSL
-		PyObject *value = NULL;
 		_stringsuck(ca, value, ssl);
 		_stringsuck(capath, value, ssl);
 		_stringsuck(cert, value, ssl);
 		_stringsuck(key, value, ssl);
 		_stringsuck(cipher, value, ssl);
-#else
-		PyErr_SetString(_mysql_NotSupportedError,
-				"client library does not have SSL support");
-		return -1;
-#endif
 	}
 
 	Py_BEGIN_ALLOW_THREADS ;
@@ -512,19 +500,13 @@ _mysql_ConnectionObject_Initialize(
 		mysql_options(&(self->connection), MYSQL_READ_DEFAULT_FILE, read_default_file);
 	if (read_default_group != NULL)
 		mysql_options(&(self->connection), MYSQL_READ_DEFAULT_GROUP, read_default_group);
-
-	if (local_infile != -1)
-		mysql_options(&(self->connection), MYSQL_OPT_LOCAL_INFILE, (char *) &local_infile);
-
-#if HAVE_OPENSSL
+#if MYSQL_VERSION_ID >= 40000
 	if (ssl)
 		mysql_ssl_set(&(self->connection),
 			      key, cert, ca, capath, cipher);
 #endif
-
 	conn = mysql_real_connect(&(self->connection), host, user, passwd, db,
 				  port, unix_socket, client_flag);
-
 	Py_END_ALLOW_THREADS ;
 
 	if (!conn) {
@@ -546,53 +528,21 @@ static char _mysql_connect__doc__[] =
 keyword parameters strongly recommended. Consult the\n\
 MySQL C API documentation for more details.\n\
 \n\
-host\n\
-  string, host to connect\n\
-\n\
-user\n\
-  string, user to connect as\n\
-\n\
-passwd\n\
-  string, password to use\n\
-\n\
-db\n\
-  string, database to use\n\
-\n\
-port\n\
-  integer, TCP/IP port to connect to\n\
-\n\
-unix_socket\n\
-  string, location of unix_socket (UNIX-ish only)\n\
-\n\
-conv\n\
-  mapping, maps MySQL FIELD_TYPE.* to Python functions which\n\
-  convert a string to the appropriate Python type\n\
-\n\
-connect_timeout\n\
-  number of seconds to wait before the connection\n\
-  attempt fails.\n\
-\n\
-compress\n\
-  if set, gzip compression is enabled\n\
-\n\
-named_pipe\n\
-  if set, connect to server via named pipe (Windows only)\n\
-\n\
-init_command\n\
-  command which is run once the connection is created\n\
-\n\
-read_default_file\n\
-  see the MySQL documentation for mysql_options()\n\
-\n\
-read_default_group\n\
-  see the MySQL documentation for mysql_options()\n\
-\n\
-client_flag\n\
-  client flags from MySQLdb.constants.CLIENT\n\
-\n\
-load_infile\n\
-  int, non-zero enables LOAD LOCAL INFILE, zero disables\n\
-\n\
+host -- string, host to connect\n\
+user -- string, user to connect as\n\
+passwd -- string, password to use\n\
+db -- string, database to use\n\
+port -- integer, TCP/IP port to connect to\n\
+unix_socket -- string, location of unix_socket (UNIX-ish only)\n\
+conv -- mapping, maps MySQL FIELD_TYPE.* to Python functions which\n\
+        convert a string to the appropriate Python type\n\
+connect_timeout -- number of seconds to wait before the connection\n\
+        attempt fails.\n\
+compress -- if set, gzip compression is enabled\n\
+named_pipe -- if set, connect to server via named pipe (Windows only)\n\
+init_command -- command which is run once the connection is created\n\
+read_default_file -- see the MySQL documentation for mysql_options()\n\
+read_default_group -- see the MySQL documentation for mysql_options()\n\
 ";
 
 static PyObject *
@@ -640,18 +590,13 @@ _mysql_ConnectionObject_close(
 	_mysql_ConnectionObject *self,
 	PyObject *args)
 {
-	if (args) {
-		if (!PyArg_ParseTuple(args, "")) return NULL;
-	}
+	if (!args) return NULL;
+	if (!PyArg_ParseTuple(args, "")) return NULL;
 	if (self->open) {
 		Py_BEGIN_ALLOW_THREADS
 		mysql_close(&(self->connection));
 		Py_END_ALLOW_THREADS
 		self->open = 0;
-	} else {
-		PyErr_SetString(_mysql_ProgrammingError,
-				"closing a closed connection");
-		return NULL;
 	}
 	_mysql_ConnectionObject_clear(self);
 	Py_INCREF(Py_None);
@@ -713,6 +658,7 @@ _mysql_ConnectionObject_dump_debug_info(
 	return Py_None;
 }
 
+#if MYSQL_VERSION_ID >= 40100
 static char _mysql_ConnectionObject_autocommit__doc__[] =
 "Set the autocommit mode. True values enable; False value disable.\n\
 ";
@@ -724,17 +670,9 @@ _mysql_ConnectionObject_autocommit(
 	int flag, err;
 	if (!PyArg_ParseTuple(args, "i", &flag)) return NULL;
 	Py_BEGIN_ALLOW_THREADS
-#if MYSQL_VERSION_ID >= 40100
 	err = mysql_autocommit(&(self->connection), flag);
-#else
-	{
-		char query[256];
-		snprintf(query, 256, "SET AUTOCOMMIT=%d", flag);
-		err = mysql_query(&(self->connection), query);
-	}
-#endif
 	Py_END_ALLOW_THREADS
-	if (err) return _mysql_Exception(self);
+	if (err) return _mysql_Execption(self);
 	Py_INCREF(Py_None);
 	return Py_None;
 }		
@@ -750,13 +688,9 @@ _mysql_ConnectionObject_commit(
 	int err;
 	if (!PyArg_ParseTuple(args, "")) return NULL;
 	Py_BEGIN_ALLOW_THREADS
-#if MYSQL_VERSION_ID >= 40100
 	err = mysql_commit(&(self->connection));
-#else
-	err = mysql_query(&(self->connection), "COMMIT");
-#endif
 	Py_END_ALLOW_THREADS
-	if (err) return _mysql_Exception(self);
+	if (err) return _mysql_Execption(self);
 	Py_INCREF(Py_None);
 	return Py_None;
 }		
@@ -772,107 +706,12 @@ _mysql_ConnectionObject_rollback(
 	int err;
 	if (!PyArg_ParseTuple(args, "")) return NULL;
 	Py_BEGIN_ALLOW_THREADS
-#if MYSQL_VERSION_ID >= 40100
 	err = mysql_rollback(&(self->connection));
-#else
-	err = mysql_query(&(self->connection), "ROLLBACK");
-#endif
 	Py_END_ALLOW_THREADS
-	if (err) return _mysql_Exception(self);
+	if (err) return _mysql_Execption(self);
 	Py_INCREF(Py_None);
 	return Py_None;
 }		
-
-static char _mysql_ConnectionObject_next_result__doc__[] =
-"If more query results exist, next_result() reads the next query\n\
-results and returns the status back to application.\n\
-\n\
-After calling next_result() the state of the connection is as if\n\
-you had called query() for the next query. This means that you can\n\
-now call store_result(), warning_count(), affected_rows()\n\
-, and so forth. \n\
-\n\
-Returns 0 if there are more results; -1 if there are no more results\n\
-\n\
-Non-standard.\n\
-";
-static PyObject *
-_mysql_ConnectionObject_next_result(
-	_mysql_ConnectionObject *self,
-	PyObject *args)
-{
-	int err;
-	if (!PyArg_ParseTuple(args, "")) return NULL;
-	Py_BEGIN_ALLOW_THREADS
-#if MYSQL_VERSION_ID >= 40100
-	err = mysql_next_result(&(self->connection));
-#else
-	err = -1;
-#endif
-	Py_END_ALLOW_THREADS
-	if (err > 0) return _mysql_Exception(self);
-	return PyInt_FromLong(err);
-}		
-
-#if MYSQL_VERSION_ID >= 40100
-
-static char _mysql_ConnectionObject_set_server_option__doc__[] =
-"set_server_option(option) -- Enables or disables an option\n\
-for the connection.\n\
-\n\
-Non-standard.\n\
-";
-static PyObject *
-_mysql_ConnectionObject_set_server_option(
-	_mysql_ConnectionObject *self,
-	PyObject *args)
-{
-	int err, flags=0;
-	if (!PyArg_ParseTuple(args, "i", &flags))
-		return NULL;
-	Py_BEGIN_ALLOW_THREADS
-	err = mysql_set_server_option(&(self->connection), flags);
-	Py_END_ALLOW_THREADS
-	if (err) return _mysql_Exception(self);
-	return PyInt_FromLong(err);
-}		
-
-static char _mysql_ConnectionObject_sqlstate__doc__[] =
-"Returns a string containing the SQLSTATE error code\n\
-for the last error. The error code consists of five characters.\n\
-'00000' means \"no error.\" The values are specified by ANSI SQL\n\
-and ODBC. For a list of possible values, see section 23\n\
-Error Handling in MySQL in the MySQL Manual.\n\
-\n\
-Note that not all MySQL errors are yet mapped to SQLSTATE's.\n\
-The value 'HY000' (general error) is used for unmapped errors.\n\
-\n\
-Non-standard.\n\
-";
-static PyObject *
-_mysql_ConnectionObject_sqlstate(
-	_mysql_ConnectionObject *self,
-	PyObject *args)
-{
-	if (!PyArg_ParseTuple(args, "")) return NULL;
-	return PyString_FromString(mysql_sqlstate(&(self->connection)));
-}		
-
-static char _mysql_ConnectionObject_warning_count__doc__[] =
-"Returns the number of warnings generated during execution\n\
-of the previous SQL statement.\n\
-\n\
-Non-standard.\n\
-";
-static PyObject *
-_mysql_ConnectionObject_warning_count(
-	_mysql_ConnectionObject *self,
-	PyObject *args)
-{
-	if (!PyArg_ParseTuple(args, "")) return NULL;
-	return PyInt_FromLong(mysql_warning_count(&(self->connection)));
-}		
-
 #endif
 
 static char _mysql_ConnectionObject_errno__doc__[] =
@@ -931,8 +770,10 @@ _mysql_escape_string(
 	len = mysql_escape_string(out, in, size);
 #else
 	check_server_init(NULL);
-	if (self && self->open)
+	if (self) {
+		check_connection(self);
 		len = mysql_real_escape_string(&(self->connection), out, in, size);
+	}
 	else
 		len = mysql_escape_string(out, in, size);
 #endif
@@ -970,8 +811,10 @@ _mysql_string_literal(
 	len = mysql_escape_string(out+1, in, size);
 #else
 	check_server_init(NULL);
-	if (self && self->open)
+	if (self) {
+		check_connection(self);
 		len = mysql_real_escape_string(&(self->connection), out+1, in, size);
+	}
 	else
 		len = mysql_escape_string(out+1, in, size);
 #endif
@@ -1978,6 +1821,7 @@ static PyMethodDef _mysql_ConnectionObject_methods[] = {
 		METH_VARARGS,
 		_mysql_ConnectionObject_affected_rows__doc__
 	},
+#if MYSQL_VERSION_ID >= 40100
 	{
 		"autocommit",
 		(PyCFunction)_mysql_ConnectionObject_autocommit,
@@ -1995,31 +1839,6 @@ static PyMethodDef _mysql_ConnectionObject_methods[] = {
 		(PyCFunction)_mysql_ConnectionObject_rollback,
 		METH_VARARGS,
 		_mysql_ConnectionObject_rollback__doc__
-	},
-	{
-		"next_result",
-		(PyCFunction)_mysql_ConnectionObject_next_result,
-		METH_VARARGS,
-		_mysql_ConnectionObject_next_result__doc__
-	},
-#if MYSQL_VERSION_ID >= 40100
-	{
-		"set_server_option",
-		(PyCFunction)_mysql_ConnectionObject_set_server_option,
-		METH_VARARGS,
-		_mysql_ConnectionObject_set_server_option__doc__
-	},
-	{
-		"sqlstate",
-		(PyCFunction)_mysql_ConnectionObject_sqlstate,
-		METH_VARARGS,
-		_mysql_ConnectionObject_sqlstate__doc__
-	},
-	{
-		"warning_count",
-		(PyCFunction)_mysql_ConnectionObject_warning_count,
-		METH_VARARGS,
-		_mysql_ConnectionObject_warning_count__doc__
 	},
 #endif
 #if MYSQL_VERSION_ID >= 32303
