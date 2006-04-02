@@ -54,7 +54,7 @@ from string import upper, split, join
 
 error = 'mysqldb.error'
 
-from _mysql import FIELD_TYPE
+from MySQLdb.constants import FIELD_TYPE
 _type_conv = { FIELD_TYPE.TINY: int,
                FIELD_TYPE.SHORT: int,
                FIELD_TYPE.LONG: long,
@@ -102,7 +102,7 @@ ROWID     = _Set()
 class Connection:
 	"""This is the connection object for the mySQL database interface."""
 	def __init__(self, host, user, passwd, db):
-		from _mysql import CLIENT
+		from MySQLdb.constants import CLIENT
 		kwargs = {}
 		kwargs['conv'] = _type_conv
 		if host: kwargs['host'] = host

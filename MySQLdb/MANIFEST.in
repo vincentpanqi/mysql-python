@@ -1,9 +1,9 @@
 prune CVS
-recursive-include doc *.txt *.html *.css
+recursive-include doc *
+recursive-include examples *
+include _mysql_version.h
+include README.MySQLmodule
+include license.py
 include MANIFEST.in
 include MANIFEST
-include ChangeLog
 include GPL
-include pymemcompat.h
-include dbapi20.py
-include test_MySQLdb_dbapi20.py
