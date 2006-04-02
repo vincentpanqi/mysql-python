@@ -1,156 +1,125 @@
 #!/usr/bin/env python
 
-"""\
-=========================
-Python interface to MySQL
-=========================
+"""Setup script for the MySQLdb module distribution."""
 
-MySQLdb is an interface to the popular MySQL_ database server for
-Python.  The design goals are:
-
-- Compliance with Python database API version 2.0 [PEP-0249]_
-
-- Thread-safety
-
-- Thread-friendliness (threads will not block each other) 
-
-MySQL-3.22 through 4.1 and Python-2.3 through 2.4 are currently
-supported.
-
-MySQLdb is `Free Software`_.
-
-.. _MySQL: http://www.mysql.com/
-.. _`Free Software`: http://www.gnu.org/
-.. [PEP-0249] http://www.python.org/peps/pep-0249.html
-
-"""
-
-import os
-import sys
+import os, sys
 from distutils.core import setup
 from distutils.extension import Extension
 
-mysqlclient = os.getenv('mysqlclient', 'mysqlclient_r')
-mysqlstatic = eval(os.getenv('mysqlstatic', 'False'))
-embedded_server = (mysqlclient == 'mysqld')
+YES = 1
+NO = 0
 
-name = "MySQL-%s" % os.path.basename(sys.executable)
-if embedded_server:
-    name = name + "-embedded"
-version = "1.2.0"
+# set this to YES if you have the thread-safe mysqlclient library
+thread_safe_library = NO
 
-extra_objects = []
+# You probably don't have to do anything past this point. If you
+# do, please mail me the configuration for your platform. Don't
+# forget to include the value of sys.platform and os.name.
 
-if sys.platform == "win32":
-    mysqlroot = os.getenv('mysqlroot', None)
-    if mysqlroot is None:
-        print "You need to set the environment variable mysqlroot!"
-        print "This should be the path to your MySQL installation."
-        print "Probably C:\Program Files\MySQL 4.1\ or something like that."
-        sys.exit(1)
+mysqlclient = thread_safe_library and "mysqlclient_r" or "mysqlclient"
 
-    include_dirs = [os.path.join(mysqlroot, "include")]
-    library_dirs = [os.path.join(mysqlroot, "libs")]
-    libraries = ['zlib', 'msvcrt', 'libcmt', 'wsock32', 'advapi32']
-    if mysqlstatic:
-        extra_objects.append(os.path.join(
-            library_dirs[0], mysqlclient+'.lib'))
-    else:
-        libraries.append(mysqlclient)
-
+if sys.platform in ("linux-i386", "linux2"): # most Linux
+    include_dirs = ['/usr/include/mysql']
+    library_dirs = ['/usr/lib/mysql']
+    libraries = [mysqlclient, "z"]
+    runtime_library_dirs = []
+    extra_objects = []
+elif sys.platform in ("freebsd4", "openbsd2"): 
+    include_dirs = ['/usr/local/include/mysql']
+    library_dirs = ['/usr/local/lib/mysql']
+    libraries = [mysqlclient, "z"]
+    runtime_library_dirs = []
+    extra_objects = []
+elif sys.platform == "sunos5": # Solaris 2.8 
+    include_dirs = ['/usr/local/mysql/include/mysql'] 
+    library_dirs = ['/usr/local/mysql/lib/mysql'] 
+    libraries = [mysqlclient, "z"] 
+    runtime_library_dirs = ['/usr/local/lib:/usr/openwin/lib:/usr/dt/lib'] 
+    extra_objects = [] 
+elif sys.platform == "win32":
+    include_dirs = [r'c:\mysql\include']
+    library_dirs = [r'c:\mysql\lib\opt']
+    libraries = [mysqlclient, 'zlib', 'msvcrt', 'libcmt',
+                 'wsock32', 'advapi32']
+    runtime_library_dirs = []
+    extra_objects = [r'c:\mysql\lib\opt\mysqlclient.lib']
+elif sys.platform == "darwin1": # Mac OS X
+    include_dirs = ['/usr/local/mysql/include/mysql']
+    library_dirs = ['/usr/local/mysql/lib/mysql']
+    libraries = [mysqlclient, "z"]
+    runtime_library_dirs = []
+    extra_objects = []
+elif os.name == "posix": # most Linux/UNIX platforms
+    include_dirs = ['/usr/include/mysql']
+    library_dirs = ['/usr/lib/mysql']
+    # MySQL-3.23 needs libz
+    libraries = [mysqlclient, "z"]
+    # On some platorms, this can be used to find the shared libraries
+    # at runtime, if they are in a non-standard location. Doesn't
+    # work for Linux gcc.
+    ## runtime_library_dirs = library_dirs
+    runtime_library_dirs = []
+    # This can be used on Linux to force use of static mysqlclient lib
+    ## extra_objects = ['/usr/lib/mysql/libmysqlclient.a']
+    extra_objects = []
 else:
+    raise "UnknownPlatform", "sys.platform=%s, os.name=%s" % \
+          (sys.platform, os.name)
     
-    def config(what):
-        from os import popen
-        f = popen("mysql_config --%s" % what)
-        data = f.read().strip().split()
-        if f.close(): data = []
-        return data
+long_description = \
+"""Python interface to MySQL-3.23
 
-    include_dirs = [ i[2:] for i in config('include') if i.startswith('-i') ]
+MySQLdb is an interface to the popular MySQL database server for Python.
+The design goals are:
 
-    if mysqlclient == "mysqlclient":
-        libs = config("libs")
-    elif mysqlclient == "mysqlclient_r":
-        libs = config("libs_r")
-    elif mysqlclient == "mysqld":
-        libs = config("embedded")
-    library_dirs = [ i[2:] for i in libs if i.startswith("-L") ]
-    libraries = [ i[2:] for i in libs if i.startswith("-l") ]
+-     Compliance with Python database API version 2.0 
+-     Thread-safety 
+-     Thread-friendliness (threads will not block each other) 
+-     Compatibility with MySQL-3.23 and later
 
-    # Workaround for a pre-4.1.9 bug
-    if "z" not in libraries:
-        libraries.append("z")
+This module should be mostly compatible with an older interface
+written by Joe Skinner and others. However, the older version is
+a) not thread-friendly, b) written for MySQL 3.21, c) apparently
+not actively maintained. No code from that version is used in
+MySQLdb. MySQLdb is free software.
 
-    extra_compile_args = config("cflags")
-
-    if mysqlstatic:
-        extra_objects.append(os.path.join(
-            library_dirs[0],'lib%s.a' % mysqlclient))
-    else:
-        libraries.append(mysqlclient)
-
-# avoid frightening noobs with warnings about missing directories
-include_dirs = [ d for d in include_dirs if os.path.isdir(d) ]
-library_dirs = [ d for d in library_dirs if os.path.isdir(d) ]
-
-classifiers = """
-Development Status :: 5 - Production/Stable
-Environment :: Other Environment
-License :: OSI Approved :: GNU General Public License (GPL)
-Operating System :: MacOS :: MacOS X
-Operating System :: Microsoft :: Windows :: Windows NT/2000
-Operating System :: OS Independent
-Operating System :: POSIX
-Operating System :: POSIX :: Linux
-Operating System :: Unix
-Programming Language :: C
-Programming Language :: Python
-Topic :: Database
-Topic :: Database :: Database Engines/Servers
 """
 
-metadata = {
-    'name': name,
-    'version': version,
-    'description': "Python interface to MySQL",
-    'long_description': __doc__,
-    'author': "Andy Dustman",
-    'author_email': "andy@dustman.net",
-    'license': "GPL",
-    'platforms': "ALL",
-    'url': "http://sourceforge.net/projects/mysql-python",
-    'download_url': "http://prdownloads.sourceforge.net/mysql-python/" \
-                    "MySQL-python-%s.tar.gz" % version,
-    'classifiers': [ c for c in classifiers.split('\n') if c ],
-    'py_modules': [
-        "_mysql_exceptions",
-        "MySQLdb.converters",
-        "MySQLdb.connections",
-        "MySQLdb.cursors",
-        "MySQLdb.sets",
-        "MySQLdb.times",
-        "MySQLdb.stringtimes",
-        "MySQLdb.mxdatetimes",
-        "MySQLdb.pytimes",
-        "MySQLdb.constants.CR",
-        "MySQLdb.constants.FIELD_TYPE",
-        "MySQLdb.constants.ER",
-        "MySQLdb.constants.FLAG",
-        "MySQLdb.constants.REFRESH",
-        "MySQLdb.constants.CLIENT",
-        ],
-    'ext_modules': [
-        Extension(
-            name='_mysql',
-            sources=['_mysql.c'],
-            include_dirs=include_dirs,
-            library_dirs=library_dirs,
-            libraries=libraries,
-            extra_compile_args=extra_compile_args,
-            extra_objects=extra_objects,
-            ),
-        ],
-    }
+setup (# Distribution meta-data
+        name = "MySQL-python",
+        version = "0.9.1",
+        description = "An interface to MySQL",
+        long_description=long_description,
+        author = "Andy Dustman",
+        author_email = "andy@dustman.net",
+        license = "GPL",
+        platforms = "ALL",
+        url = "http://sourceforge.net/projects/mysql-python",
 
-setup(**metadata)
+        # Description of the modules and packages in the distribution
+
+        py_modules = ["CompatMysqldb",
+                      "_mysql_exceptions",
+                      "MySQLdb.converters",
+                      "MySQLdb.connections",
+                      "MySQLdb.cursors",
+                      "MySQLdb.sets",
+                      "MySQLdb.times",
+                      "MySQLdb.constants.CR",
+                      "MySQLdb.constants.FIELD_TYPE",
+                      "MySQLdb.constants.ER",
+                      "MySQLdb.constants.FLAG",
+                      "MySQLdb.constants.REFRESH",
+                      "MySQLdb.constants.CLIENT",
+                     ],
+
+        ext_modules = [Extension(
+                name='_mysql',
+                sources=['_mysql.c'],
+                include_dirs=include_dirs,
+                library_dirs=library_dirs,
+                runtime_library_dirs=runtime_library_dirs,
+                libraries=libraries,
+                extra_objects=extra_objects,
+                )],
+)
