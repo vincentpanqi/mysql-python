@@ -53,6 +53,9 @@ if enabled('embedded'):
 elif enabled('threadsafe'):
     libs = mysql_config("libs_r")
     client = "mysqlclient_r"
+    if not libs:
+        libs = mysql_config("libs")
+        client = "mysqlclient"
 else:
     libs = mysql_config("libs")
     client = "mysqlclient"
@@ -100,7 +103,7 @@ ext_mysql_metadata = dict(
     libraries=libraries,
     extra_compile_args=extra_compile_args,
     extra_objects=extra_objects,
-    sources=['_mysql.c', '_mysql_connections.c', '_mysql_results.c'],
+    sources=['_mysql.c'],
     )
 if config.read(['site.cfg']):
     ext_mysql_metadata.update([ (k, v.split()) for k, v in config.items('compiler') ])
